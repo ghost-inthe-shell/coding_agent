@@ -101,9 +101,8 @@ class OpenAICompatibleProvider(LLMProvider):
         raw_stop_reason = _field(choice, "finish_reason")
         stop_reason, error_message = _map_stop_reason(raw_stop_reason)
         has_tool_calls = any(isinstance(block, ToolCall) for block in content)
-        if has_tool_calls and stop_reason is StopReason.LENGTH:
-            raise ProviderError("OpenAI-compatible response truncated one or more tool calls")
-        if has_tool_calls and stop_reason is not StopReason.TOOL_USE:
+        valid_tool_stop_reasons = {StopReason.TOOL_USE, StopReason.LENGTH}
+        if has_tool_calls and stop_reason not in valid_tool_stop_reasons:
             raise ProviderError(
                 f"OpenAI-compatible response returned tool calls with finish_reason={raw_stop_reason!r}"
             )

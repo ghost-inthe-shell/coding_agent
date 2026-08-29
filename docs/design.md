@@ -24,6 +24,9 @@ tool result 始终按原顺序完整配对。单轮默认最多调用模型 8 �
 会发出不带工具的最终请求。即使该请求返回了有用文本，`RunResult` 仍标记为
 `limit_reached`。
 
+若模型因输出 token 限制停止，纯文本作为部分结果以 `limit_reached` 结束；若响应包含 tool
+calls，Runtime 不执行整批调用，而是逐个生成配对错误结果，并在模型调用预算允许时继续循环。
+
 Runtime 只提供一个可选的同步事件接收函数，并且只有六种强类型事件：turn started、model
 requested、model responded、tool started、tool finished、turn finished。不实现 EventBus 或
 通用 hook 框架。

@@ -24,7 +24,11 @@ class EchoTool(Tool[EchoInput]):
     description = "Echo text."
     input_model = EchoInput
 
+    def __init__(self) -> None:
+        self.executions: list[str] = []
+
     def execute(self, arguments: EchoInput, context: ToolContext) -> ToolResult:
+        self.executions.append(arguments.text)
         return ToolResult.from_text(arguments.text)
 
 
@@ -133,6 +137,52 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(result.status, RunStatus.PROVIDER_ERROR)
         self.assertEqual(result.error_message, "offline")
+
+    def test_truncated_tool_calls_are_paired_but_never_executed(self) -> None:
+        truncated = AssistantMessage(
+            content=(
+                TextBlock("partial"),
+                ToolCall(id="call-1", name="echo", arguments={"text": "unsafe"}),
+            ),
+            provider="fake",
+            model="fake",
+            stop_reason=StopReason.LENGTH,
+        )
+        provider = SequenceProvider((truncated, text_message("recovered")))
+        tool = EchoTool()
+        state = self.state()
+
+        result = Runtime(provider, (tool,), state_home=self.root).run_turn(state, "work")
+
+        self.assertEqual(result.status, RunStatus.COMPLETED)
+        self.assertEqual(result.final_text, "recovered")
+        self.assertEqual(result.tool_calls, 0)
+        self.assertEqual(tool.executions, [])
+        tool_results = [
+            message for message in state.messages if isinstance(message, ToolResultMessage)
+        ]
+        self.assertEqual(len(tool_results), 1)
+        self.assertEqual(tool_results[0].status, ToolResultStatus.ERROR)
+        self.assertEqual(tool_results[0].metadata["reason"], "truncated_model_response")
+        state.validate()
+
+    def test_truncated_text_returns_partial_limit_result(self) -> None:
+        partial = AssistantMessage(
+            content=(TextBlock("partial answer"),),
+            provider="fake",
+            model="fake",
+            stop_reason=StopReason.LENGTH,
+        )
+
+        result = Runtime(
+            SequenceProvider((partial,)),
+            (),
+            state_home=self.root,
+        ).run_turn(self.state(), "work")
+
+        self.assertEqual(result.status, RunStatus.LIMIT_REACHED)
+        self.assertEqual(result.final_text, "partial answer")
+        self.assertEqual(result.stop_reason, StopReason.LENGTH)
 
 
 if __name__ == "__main__":

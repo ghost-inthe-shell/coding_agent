@@ -100,8 +100,10 @@ class AssistantMessage:
         if not self.model:
             raise ValueError("model must not be empty")
         has_tool_calls = any(isinstance(block, ToolCall) for block in self.content)
-        if has_tool_calls and self.stop_reason is not StopReason.TOOL_USE:
-            raise ValueError("assistant messages with tool calls must use stop_reason=tool_use")
+        if has_tool_calls and self.stop_reason not in {StopReason.TOOL_USE, StopReason.LENGTH}:
+            raise ValueError(
+                "assistant messages with tool calls must use stop_reason=tool_use or length"
+            )
         if self.stop_reason is StopReason.TOOL_USE and not has_tool_calls:
             raise ValueError("stop_reason=tool_use requires at least one tool call")
         if self.stop_reason in {StopReason.ERROR, StopReason.ABORTED} and not self.error_message:

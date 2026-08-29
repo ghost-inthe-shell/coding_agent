@@ -130,7 +130,7 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
 
         self.assertEqual(result.stop_reason, StopReason.LENGTH)
 
-    def test_rejects_truncated_tool_calls_until_runtime_policy_is_defined(self) -> None:
+    def test_preserves_truncated_tool_calls_for_runtime_rejection(self) -> None:
         raw_call = namespace(
             id="call-1",
             function=namespace(name="read_file", arguments='{"path":"a.py"}'),
@@ -142,8 +142,10 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
             ),
         )
 
-        with self.assertRaisesRegex(ProviderError, "truncated"):
-            provider.complete(CompletionRequest(messages=(), system_prompt="System"))
+        result = provider.complete(CompletionRequest(messages=(), system_prompt="System"))
+
+        self.assertEqual(result.stop_reason, StopReason.LENGTH)
+        self.assertEqual(result.tool_calls[0].id, "call-1")
 
     def test_wraps_client_failure(self) -> None:
         provider = OpenAICompatibleProvider(

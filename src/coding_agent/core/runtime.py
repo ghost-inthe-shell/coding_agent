@@ -108,6 +108,36 @@ class Runtime:
                             error_message=assistant.error_message,
                         ),
                     )
+                if assistant.stop_reason is StopReason.LENGTH:
+                    for call in assistant.tool_calls:
+                        self._emit(ToolStarted(state.session_id, call))
+                        result = ToolResult.error(
+                            "tool call was not executed because the model response reached "
+                            "its output-token limit; reissue it with complete arguments",
+                            metadata={
+                                "not_executed": True,
+                                "reason": "truncated_model_response",
+                            },
+                        )
+                        message = result.to_message(call)
+                        state.messages.append(message)
+                        state.touch()
+                        self._emit(ToolFinished(state.session_id, message))
+
+                    if assistant.tool_calls and model_calls < self._limits.max_model_calls:
+                        continue
+                    return self._finish(
+                        state,
+                        RunResult(
+                            status=RunStatus.LIMIT_REACHED,
+                            final_text=assistant.text,
+                            usage=turn_usage,
+                            model_turns=model_calls,
+                            tool_calls=tool_calls,
+                            stop_reason=assistant.stop_reason,
+                            error_message="model output-token limit reached",
+                        ),
+                    )
                 if not assistant.tool_calls:
                     return self._finish(
                         state,

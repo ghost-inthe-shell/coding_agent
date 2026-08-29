@@ -125,6 +125,17 @@ class MessageProtocolTests(unittest.TestCase):
                 stop_reason=StopReason.TOOL_USE,
             )
 
+    def test_length_stop_reason_may_preserve_truncated_tool_calls(self) -> None:
+        message = AssistantMessage(
+            content=(ToolCall(id="call-1", name="write_file"),),
+            provider="fake",
+            model="fake-model",
+            stop_reason=StopReason.LENGTH,
+        )
+
+        self.assertEqual(message.stop_reason, StopReason.LENGTH)
+        self.assertEqual(message.tool_calls[0].id, "call-1")
+
 
 class UsageTests(unittest.TestCase):
     def test_usage_accumulates_normalized_fields(self) -> None:
