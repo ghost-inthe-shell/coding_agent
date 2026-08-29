@@ -28,23 +28,6 @@ class TextBlock:
 
 
 @dataclass(frozen=True, slots=True)
-class ImageBlock:
-    data: str
-    mime_type: str
-
-    def __post_init__(self) -> None:
-        if not self.mime_type:
-            raise ValueError("mime_type must not be empty")
-
-    @property
-    def type(self) -> str:
-        return "image"
-
-    def to_dict(self) -> JsonObject:
-        return {"type": self.type, "data": self.data, "mime_type": self.mime_type}
-
-
-@dataclass(frozen=True, slots=True)
 class ToolCall:
     id: str
     name: str
@@ -77,9 +60,9 @@ class ToolCall:
         return result
 
 
-UserContent = Union[TextBlock, ImageBlock]
+UserContent = TextBlock
 AssistantContent = Union[TextBlock, ToolCall]
-ToolResultContent = Union[TextBlock, ImageBlock]
+ToolResultContent = TextBlock
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,11 +280,6 @@ def _user_content_from_dict(value: object) -> UserContent:
     block = _content_mapping(value)
     if block.get("type") == "text":
         return TextBlock(_required_string(block, "text"))
-    if block.get("type") == "image":
-        return ImageBlock(
-            data=_required_string(block, "data"),
-            mime_type=_required_string(block, "mime_type"),
-        )
     raise ValueError(f"unsupported user content type: {block.get('type')!r}")
 
 

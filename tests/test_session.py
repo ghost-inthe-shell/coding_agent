@@ -8,7 +8,7 @@ from coding_agent.core.messages import (
     ToolResultMessage,
     UserMessage,
 )
-from coding_agent.core.session import FileVersion, SessionState
+from coding_agent.core.session import SessionState
 from coding_agent.core.types import SessionStatus, StopReason
 from coding_agent.core.usage import Usage
 
@@ -18,6 +18,7 @@ class SessionStateTests(unittest.TestCase):
         state = SessionState(
             session_id="session-1",
             workspace_root="/tmp/workspace",
+            system_prompt="Be useful.",
             messages=[
                 UserMessage.from_text("read the file", timestamp=10),
                 AssistantMessage(
@@ -35,14 +36,6 @@ class SessionStateTests(unittest.TestCase):
                 ),
             ],
             usage=Usage(input_tokens=20, output_tokens=4),
-            read_file_versions={
-                "README.md": FileVersion(
-                    mtime_ns=123,
-                    size=42,
-                    sha256="a" * 64,
-                )
-            },
-            modified_files=["src/example.py"],
             status=SessionStatus.IDLE,
             created_at=1,
             updated_at=2,
@@ -54,11 +47,12 @@ class SessionStateTests(unittest.TestCase):
         self.assertEqual(restored, state)
         restored.validate()
 
-    def test_file_version_requires_a_sha256_digest(self) -> None:
-        with self.assertRaisesRegex(ValueError, "sha256"):
-            FileVersion(mtime_ns=1, size=1, sha256="not-a-digest")
+    def test_new_session_loads_a_system_prompt_snapshot(self) -> None:
+        state = SessionState.create("session-1", "/tmp")
+
+        self.assertTrue(state.system_prompt)
+        self.assertEqual(state.workspace_root, "/tmp")
 
 
 if __name__ == "__main__":
     unittest.main()
-

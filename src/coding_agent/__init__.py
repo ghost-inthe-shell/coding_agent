@@ -2,7 +2,6 @@
 
 from .core.messages import (
     AssistantMessage,
-    ImageBlock,
     Message,
     ProtocolError,
     TextBlock,
@@ -14,17 +13,18 @@ from .core.messages import (
     validate_message_sequence,
 )
 from .core.results import RunResult, ToolResult
-from .core.session import FileVersion, SessionState
+from .core.runtime import Runtime, RuntimeLimits
+from .core.session import SessionState
 from .core.types import RunStatus, SessionStatus, StopReason, ToolResultStatus
 from .core.usage import Usage
 
 __all__ = [
     "AssistantMessage",
-    "FileVersion",
-    "ImageBlock",
     "Message",
     "ProtocolError",
     "RunResult",
+    "Runtime",
+    "RuntimeLimits",
     "RunStatus",
     "SessionState",
     "SessionStatus",
@@ -40,4 +40,3 @@ __all__ = [
     "message_to_dict",
     "validate_message_sequence",
 ]
-
