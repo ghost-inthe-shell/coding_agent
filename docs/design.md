@@ -37,9 +37,9 @@ requested、model responded、tool started、tool finished、turn finished。不
 
 ## 只读工具与路径
 
-第一批工具为 `read_file`、`glob_files` 和 `grep_search`。适合时优先调用 ripgrep，glob 和
-grep 不设置各自的匹配条数上限。`read_file` 仍使用 offset/limit，因为分页属于读取语义，
-不是另一套结果限制策略。
+第一批工具为 `read_file`、`glob_files` 和 `grep_search`。适合时优先调用 ripgrep；
+`grep_search` 在 ripgrep 不可用时使用系统 grep。glob 和 grep 不设置各自的匹配条数上限。
+`read_file` 仍使用 offset/limit，因为分页属于读取语义，不是另一套结果限制策略。
 
 解析真实路径后，只自动允许读取 workspace 根目录和当前 session 的 agent artifact 根目录，
 从而阻止符号链接越界。第一版直接拒绝其他路径；未来交互客户端可把拒绝替换成 ask/confirm，

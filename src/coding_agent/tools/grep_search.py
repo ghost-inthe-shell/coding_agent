@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import fnmatch
-import os
 from pathlib import Path
-import re
 import shutil
 
 from pydantic import Field
@@ -13,7 +10,6 @@ from pydantic import Field
 from coding_agent.core.results import ToolResult
 from coding_agent.permissions import PathAccessDenied, ReadPathPolicy
 
-from .artifacts import DEFAULT_MAX_ARTIFACT_BYTES
 from .base import Tool, ToolContext, ToolInput
 from .path_helpers import IGNORED_DIRECTORY_NAMES, RG_IGNORE_GLOBS, display_path
 from .process import run_limited_process
@@ -44,7 +40,10 @@ class GrepSearchTool(Tool[GrepSearchInput]):
         rg = shutil.which("rg")
         if rg is not None:
             return self._with_ripgrep(rg, target, arguments, context)
-        return self._with_python(target, arguments, context)
+        grep = shutil.which("grep")
+        if grep is not None:
+            return self._with_grep(grep, target, arguments, context)
+        return ToolResult.error("grep_search requires either rg or grep")
 
     def _with_ripgrep(
         self,
@@ -77,63 +76,47 @@ class GrepSearchTool(Tool[GrepSearchInput]):
             },
         )
 
-    def _with_python(
+    def _with_grep(
         self,
+        grep: str,
         target: Path,
         arguments: GrepSearchInput,
         context: ToolContext,
     ) -> ToolResult:
+        command = [
+            grep,
+            "--recursive",
+            "--line-number",
+            "--with-filename",
+            "--extended-regexp",
+            "--binary-files=without-match",
+            "--color=never",
+        ]
+        if arguments.glob is not None:
+            command.append(f"--include={arguments.glob}")
+        command.extend(("--exclude=.*", "--exclude-dir=.?", "--exclude-dir=.??*"))
+        command.extend(
+            f"--exclude-dir={directory}" for directory in sorted(IGNORED_DIRECTORY_NAMES)
+        )
+        command.extend(("--", arguments.pattern, display_path(target, context.workspace_root)))
         try:
-            expression = re.compile(arguments.pattern)
-        except re.error as exc:
-            return ToolResult.error(f"invalid regular expression: {exc}")
+            output = run_limited_process(command, cwd=Path(context.workspace_root))
+        except OSError as exc:
+            return ToolResult.error(f"could not run grep: {exc}")
 
-        files = [target] if target.is_file() else _walk_files(target)
-        lines: list[str] = []
-        size = 0
-        incomplete = False
-        for path in files:
-            relative = path.name if target.is_file() else path.relative_to(target).as_posix()
-            if arguments.glob is not None and not (
-                fnmatch.fnmatch(relative, arguments.glob)
-                or fnmatch.fnmatch(path.name, arguments.glob)
-            ):
-                continue
-            try:
-                with path.open("r", encoding="utf-8") as source:
-                    for number, text in enumerate(source, start=1):
-                        text = text.rstrip("\r\n")
-                        if expression.search(text) is None:
-                            continue
-                        line = f"{display_path(path, context.workspace_root)}:{number}:{text}"
-                        line_size = len((line + "\n").encode("utf-8"))
-                        if size + line_size > DEFAULT_MAX_ARTIFACT_BYTES:
-                            incomplete = True
-                            break
-                        lines.append(line)
-                        size += line_size
-            except (OSError, UnicodeDecodeError):
-                continue
-            if incomplete:
-                break
-
+        if output.returncode == 1 and not output.incomplete:
+            return ToolResult.from_text(
+                "No matches found.",
+                metadata={"engine": "grep", "gitignore_honored": False},
+            )
+        if output.returncode not in (0, 1) and not output.incomplete:
+            return ToolResult.error(output.stderr.strip() or "grep failed")
+        content = "\n".join(line.removeprefix("./") for line in output.stdout.splitlines())
         return ToolResult.from_text(
-            "\n".join(lines) if lines else "No matches found.",
+            content,
             metadata={
-                "engine": "python",
+                "engine": "grep",
                 "gitignore_honored": False,
-                "artifact_incomplete": incomplete,
+                "artifact_incomplete": output.incomplete,
             },
         )
-
-
-def _walk_files(root: Path) -> list[Path]:
-    paths: list[Path] = []
-    for directory, dirs, files in os.walk(root):
-        dirs[:] = sorted(
-            name
-            for name in dirs
-            if name not in IGNORED_DIRECTORY_NAMES and not name.startswith(".")
-        )
-        paths.extend(Path(directory) / name for name in sorted(files) if not name.startswith("."))
-    return paths

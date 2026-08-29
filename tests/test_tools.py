@@ -1,7 +1,9 @@
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from coding_agent.core.messages import ToolCall
 from coding_agent.core.results import ToolResult
@@ -115,6 +117,59 @@ class ReadOnlyToolTests(unittest.TestCase):
         artifact = Path(result.metadata["artifact_path"])
         self.assertLessEqual(artifact.stat().st_size, 1000)
         self.assertTrue(result.metadata["artifact_incomplete"])
+
+    def test_grep_command_is_used_when_ripgrep_is_missing(self) -> None:
+        grep = shutil.which("grep")
+        self.assertIsNotNone(grep)
+        (self.workspace / "match.py").write_text("needle\n", encoding="utf-8")
+        (self.workspace / "skip.txt").write_text("needle\n", encoding="utf-8")
+        (self.workspace / ".hidden.py").write_text("needle\n", encoding="utf-8")
+
+        with patch(
+            "coding_agent.tools.grep_search.shutil.which",
+            side_effect=lambda command: None if command == "rg" else grep,
+        ):
+            result = self.execute(
+                "grep_search",
+                {"pattern": "needle", "glob": "*.py"},
+                "grep-fallback-call",
+            )
+
+        self.assertEqual(result.status, ToolResultStatus.SUCCESS)
+        self.assertEqual(result.metadata["engine"], "grep")
+        self.assertFalse(result.metadata["gitignore_honored"])
+        self.assertIn("match.py:1:needle", result.content)
+        self.assertNotIn("skip.txt", result.content)
+        self.assertNotIn(".hidden.py", result.content)
+
+    def test_grep_command_distinguishes_no_match_and_invalid_regex(self) -> None:
+        grep = shutil.which("grep")
+        self.assertIsNotNone(grep)
+        (self.workspace / "sample.txt").write_text("text\n", encoding="utf-8")
+
+        with patch(
+            "coding_agent.tools.grep_search.shutil.which",
+            side_effect=lambda command: None if command == "rg" else grep,
+        ):
+            no_match = self.execute(
+                "grep_search", {"pattern": "missing"}, "grep-no-match-call"
+            )
+            invalid = self.execute(
+                "grep_search", {"pattern": "["}, "grep-invalid-call"
+            )
+
+        self.assertEqual(no_match.status, ToolResultStatus.SUCCESS)
+        self.assertEqual(no_match.content, "No matches found.")
+        self.assertEqual(invalid.status, ToolResultStatus.ERROR)
+
+    def test_grep_search_fails_clearly_when_no_search_command_exists(self) -> None:
+        with patch("coding_agent.tools.grep_search.shutil.which", return_value=None):
+            result = self.execute(
+                "grep_search", {"pattern": "anything"}, "no-search-command-call"
+            )
+
+        self.assertEqual(result.status, ToolResultStatus.ERROR)
+        self.assertIn("requires either rg or grep", result.content)
 
 
 if __name__ == "__main__":
