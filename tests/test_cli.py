@@ -2,12 +2,13 @@ import tempfile
 import unittest
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from coding_agent import cli
 from coding_agent.cli import InteractivePermissionHandler, build_parser, run_repl
 from coding_agent.core.results import RunResult
 from coding_agent.core.session import SessionState
+from coding_agent.core.session_store import SessionNotFoundError, SessionSaveError
 from coding_agent.core.types import RunStatus
 from coding_agent.core.usage import Usage
 from coding_agent.permissions import PermissionDecision, PermissionOperation, PermissionRequest
@@ -21,6 +22,18 @@ class RecordingRuntime:
     def run_turn(self, state: SessionState, user_input: str) -> RunResult:
         self.calls.append((state, user_input))
         return next(self.results)
+
+
+class RecordingSessionStore:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.saved: list[SessionState] = []
+
+    def save(self, state: SessionState) -> Path:
+        self.saved.append(state)
+        if self.error is not None:
+            raise self.error
+        return Path("/state/session.json")
 
 
 class InteractiveStringIO(StringIO):
@@ -61,8 +74,56 @@ class ReplTests(unittest.TestCase):
         self.assertEqual([call[1] for call in runtime.calls], ["first question", "second question"])
         self.assertIs(runtime.calls[0][0], self.state)
         self.assertIs(runtime.calls[1][0], self.state)
+        self.assertIn("Session: session-1", output.getvalue())
         self.assertIn("assistant> first answer", output.getvalue())
         self.assertIn("assistant> second answer", output.getvalue())
+
+    def test_repl_checkpoints_after_each_completed_turn(self) -> None:
+        runtime = RecordingRuntime(
+            [
+                RunResult(status=RunStatus.COMPLETED, final_text="first answer"),
+                RunResult(
+                    status=RunStatus.PROVIDER_ERROR,
+                    final_text="",
+                    error_message="offline",
+                ),
+            ]
+        )
+        store = RecordingSessionStore()
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            session_store=store,
+            input_stream=StringIO("first\nsecond\n/exit\n"),
+            output_stream=StringIO(),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(store.saved, [self.state, self.state])
+
+    def test_checkpoint_failure_terminates_before_another_turn(self) -> None:
+        runtime = RecordingRuntime(
+            [
+                RunResult(status=RunStatus.COMPLETED, final_text="answer"),
+                RunResult(status=RunStatus.COMPLETED, final_text="must not run"),
+            ]
+        )
+        store = RecordingSessionStore(SessionSaveError("disk full"))
+        output = StringIO()
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            session_store=store,
+            input_stream=StringIO("first\nsecond\n"),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual([call[1] for call in runtime.calls], ["first"])
+        self.assertIn("[session_error]", output.getvalue())
+        self.assertIn("REPL terminated", output.getvalue())
 
     def test_help_unknown_command_and_eof_do_not_call_runtime(self) -> None:
         runtime = RecordingRuntime([])
@@ -116,6 +177,94 @@ class ReplTests(unittest.TestCase):
         arguments = build_parser().parse_args(["--model", "model"])
 
         self.assertEqual(arguments.max_tokens, 16_384)
+
+    def test_workspace_and_resume_are_mutually_exclusive(self) -> None:
+        parser = build_parser()
+
+        with self.assertRaises(SystemExit):
+            parser.parse_args(
+                [
+                    "--model",
+                    "model",
+                    "--workspace",
+                    str(self.workspace),
+                    "--resume",
+                    "session-1",
+                ]
+            )
+
+    def test_main_loads_explicit_session_before_starting_repl(self) -> None:
+        store = Mock()
+        store.load.return_value = self.state
+        runtime = object()
+
+        with (
+            patch.object(cli, "SessionStore", return_value=store),
+            patch.object(cli, "_create_provider", return_value=object()),
+            patch.object(cli, "Runtime", return_value=runtime),
+            patch.object(cli, "run_repl", return_value=0) as repl,
+        ):
+            exit_code = cli.main(["--model", "model", "--resume", "session-1"])
+
+        self.assertEqual(exit_code, 0)
+        store.load.assert_called_once_with("session-1")
+        store.save.assert_not_called()
+        repl.assert_called_once_with(runtime, self.state, session_store=store)
+
+    def test_main_saves_new_session_before_starting_repl(self) -> None:
+        store = Mock()
+        runtime = object()
+
+        with (
+            patch.object(cli, "SessionStore", return_value=store),
+            patch.object(cli, "_create_provider", return_value=object()),
+            patch.object(cli, "Runtime", return_value=runtime),
+            patch.object(cli, "run_repl", return_value=0) as repl,
+        ):
+            exit_code = cli.main(
+                ["--model", "model", "--workspace", str(self.workspace)]
+            )
+
+        self.assertEqual(exit_code, 0)
+        state = store.save.call_args.args[0]
+        self.assertEqual(state.workspace_root, str(self.workspace))
+        self.assertEqual(len(state.session_id), 32)
+        repl.assert_called_once_with(runtime, state, session_store=store)
+
+    def test_main_fails_before_provider_creation_when_resume_cannot_load(self) -> None:
+        store = Mock()
+        store.load.side_effect = SessionNotFoundError("session not found: missing")
+        error_output = StringIO()
+
+        with (
+            patch.object(cli, "SessionStore", return_value=store),
+            patch.object(cli, "_create_provider") as create_provider,
+            patch.object(cli.sys, "stderr", error_output),
+        ):
+            exit_code = cli.main(["--model", "model", "--resume", "missing"])
+
+        self.assertEqual(exit_code, 1)
+        create_provider.assert_not_called()
+        self.assertIn("session not found: missing", error_output.getvalue())
+
+    def test_main_does_not_enter_repl_when_initial_checkpoint_fails(self) -> None:
+        store = Mock()
+        store.save.side_effect = SessionSaveError("disk full")
+        error_output = StringIO()
+
+        with (
+            patch.object(cli, "SessionStore", return_value=store),
+            patch.object(cli, "_create_provider", return_value=object()),
+            patch.object(cli, "run_repl") as repl,
+            patch.object(cli.sys, "stderr", error_output),
+        ):
+            exit_code = cli.main(
+                ["--model", "model", "--workspace", str(self.workspace)]
+            )
+
+        self.assertEqual(exit_code, 1)
+        repl.assert_not_called()
+        self.assertIn("disk full", error_output.getvalue())
 
     def test_real_tty_uses_terminal_input_editor(self) -> None:
         runtime = RecordingRuntime(

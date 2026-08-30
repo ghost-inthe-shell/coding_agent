@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover - readline is expected on Linux
 from coding_agent.core.results import RunResult
 from coding_agent.core.runtime import Runtime
 from coding_agent.core.session import SessionState
+from coding_agent.core.session_store import SessionStore, SessionStoreError
 from coding_agent.core.types import RunStatus
 from coding_agent.permissions import (
     PermissionDecision,
@@ -47,6 +48,11 @@ HELP_TEXT = """Commands:
 
 class _TurnRunner(Protocol):
     def run_turn(self, state: SessionState, user_input: str) -> RunResult:
+        ...
+
+
+class _SessionSaver(Protocol):
+    def save(self, state: SessionState) -> Path:
         ...
 
 
@@ -103,12 +109,19 @@ def run_repl(
     runtime: _TurnRunner,
     state: SessionState,
     *,
+    session_store: _SessionSaver | None = None,
     input_stream: TextIO = sys.stdin,
     output_stream: TextIO = sys.stdout,
 ) -> int:
     """Run a single-line, multi-turn REPL over one SessionState."""
 
-    _write(output_stream, f"Coding Agent ({state.workspace_root})\nType /help for commands.\n")
+    _write(
+        output_stream,
+        f"Coding Agent\n"
+        f"Session: {state.session_id}\n"
+        f"Workspace: {state.workspace_root}\n"
+        "Type /help for commands.\n",
+    )
     while True:
         try:
             line = _read_line("> ", input_stream, output_stream)
@@ -134,6 +147,15 @@ def run_repl(
 
         result = runtime.run_turn(state, user_input)
         _print_result(result, output_stream)
+        if session_store is not None:
+            try:
+                session_store.save(state)
+            except SessionStoreError as exc:
+                _write(
+                    output_stream,
+                    f"[session_error] checkpoint failed; REPL terminated: {exc}\n",
+                )
+                return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -145,10 +167,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="model API provider (default: openai-compatible)",
     )
     parser.add_argument("--model", required=True, help="provider model identifier")
-    parser.add_argument(
+    session_source = parser.add_mutually_exclusive_group()
+    session_source.add_argument(
         "--workspace",
-        default=".",
-        help="workspace directory (default: current directory)",
+        help="workspace directory for a new session (default: current directory)",
+    )
+    session_source.add_argument(
+        "--resume",
+        metavar="SESSION_ID",
+        help="resume the explicitly identified session and its saved workspace",
     )
     parser.add_argument(
         "--base-url",
@@ -169,11 +196,25 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
-    workspace = Path(arguments.workspace).expanduser().resolve()
-    if not workspace.is_dir():
-        parser.error(f"workspace is not a directory: {arguments.workspace}")
     if arguments.provider == "anthropic" and arguments.base_url is not None:
         parser.error("--base-url is only valid with the openai-compatible provider")
+
+    session_store = SessionStore()
+    if arguments.resume is not None:
+        try:
+            state = session_store.load(arguments.resume)
+        except SessionStoreError as exc:
+            _write(sys.stderr, f"coding-agent: session error: {exc}\n")
+            return 1
+        workspace = Path(state.workspace_root)
+        if not workspace.is_dir():
+            parser.error(f"saved workspace is not a directory: {state.workspace_root}")
+    else:
+        workspace_argument = arguments.workspace if arguments.workspace is not None else "."
+        workspace = Path(workspace_argument).expanduser().resolve()
+        if not workspace.is_dir():
+            parser.error(f"workspace is not a directory: {workspace_argument}")
+        state = SessionState.create(uuid4().hex, workspace)
 
     try:
         provider = _create_provider(
@@ -197,8 +238,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         permission_handler=InteractivePermissionHandler(),
     )
-    state = SessionState.create(uuid4().hex, workspace)
-    return run_repl(runtime, state)
+    if arguments.resume is None:
+        try:
+            session_store.save(state)
+        except SessionStoreError as exc:
+            _write(sys.stderr, f"coding-agent: session error: {exc}\n")
+            return 1
+    return run_repl(runtime, state, session_store=session_store)
 
 
 def _create_provider(

@@ -6,12 +6,20 @@
 
 交互客户端直接采用单行同步 REPL，并在同一个 `SessionState` 上执行多轮对话。第一版只有
 help/exit 命令，Linux 交互 TTY 使用 Python 标准库 GNU readline 做单行编辑；不实现
-one-shot 模式、TUI、流式输出、多行编辑或会话恢复。
+one-shot 模式、TUI、流式输出、多行编辑或 REPL 内会话切换。
 
 ## 核心边界
 
 - `SessionState` 是会话状态的唯一事实来源。`Runtime.run_turn` 修改传入的状态，不在内部
   维护第二份消息历史。
+- 会话只在创建完成及 `Runtime.run_turn` 正常返回后的稳定边界持久化；`running` 状态或存在
+  未配对 tool call 的状态不得写入。checkpoint 失败立即终止 REPL，避免继续产生仅存在于
+  内存中的历史。
+- `--resume SESSION_ID` 只恢复显式指定的会话，使用其中保存的 workspace，并与
+  `--workspace` 互斥。不提供 latest、会话列表或 REPL 内切换。
+- checkpoint 保存到
+  `${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/<session-id>/session.json`，采用同目录
+  临时文件、`fsync` 和原子替换；会话目录权限为 `0700`，JSON 文件为 `0600`。
 - workspace 内成功的 `read_file` 将规范相对路径及 `mtime_ns`、大小和全文件 SHA-256
   登记到 `SessionState.read_file_versions`。不保存文件正文；artifact 与 workspace 外读取不登记。
 - `prompts/system.md` 是可编辑的 system prompt 源文件。创建会话时把解析后的文本保存到

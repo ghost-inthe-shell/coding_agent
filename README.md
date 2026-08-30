@@ -1,7 +1,8 @@
 # Coding Agent
 
 从零实现的 Python 编程智能体。目前已经完成同步 Runtime、核心协议、两个模型 Provider、
-只读工具、最小文件写入/精确编辑工具、受确认保护的 Shell 工具和同步 REPL。
+只读工具、最小文件写入/精确编辑工具、受确认保护的 Shell 工具，以及支持会话恢复的同步
+REPL。
 
 ## 结构
 
@@ -85,6 +86,21 @@ coding-agent \
 Anthropic Provider 直接从环境变量读取 `ANTHROPIC_API_KEY` 和可选的
 `ANTHROPIC_BASE_URL`，因此不接收 `--base-url`。
 
+程序启动后会显示当前 session ID。之后可使用同样的 Provider 配置显式恢复该会话；workspace
+从 checkpoint 中读取，因此不能同时传入 `--workspace`：
+
+```bash
+coding-agent \
+  --provider openai-compatible \
+  --model deepseek-v4-flash \
+  --base-url "$OPENAI_BASE_URL" \
+  --resume <session-id>
+```
+
+会话在创建时及每轮结束后保存到
+`${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/<session-id>/session.json`。保存失败会立即
+终止 REPL，防止后续消息建立在未持久化的历史上。
+
 也可不激活虚拟环境，直接使用其中的可执行文件：
 
 ```bash
@@ -118,9 +134,9 @@ python -m pip install -e '.[openai,anthropic]'
 REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看命令，输入 `/exit`
 或按 Ctrl-D 退出。workspace 外的只读工具调用会显示规范化路径并逐次请求确认。第一版只
 接收单行输入；Linux 交互式终端使用 GNU readline 提供光标移动、退格和当前进程内
-历史。不提供 TUI、流式输出或会话恢复。文件写入和每条 Shell 命令也会逐次请求确认；
-Shell 固定在 workspace 根目录启动，并使用 120 秒默认超时。模型每次调用默认最多生成
-16,384 tokens，可通过 `--max-tokens` 调整。
+历史。不提供 TUI、流式输出、latest 会话选择或 REPL 内会话切换。文件写入和每条 Shell
+命令也会逐次请求确认；Shell 固定在 workspace 根目录启动，并使用 120 秒默认超时。模型
+每次调用默认最多生成 16,384 tokens，可通过 `--max-tokens` 调整。
 
 ## 验证
 
