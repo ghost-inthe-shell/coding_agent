@@ -28,6 +28,27 @@ class TextBlock:
 
 
 @dataclass(frozen=True, slots=True)
+class ThinkingBlock:
+    thinking: str
+    replay_field: str | None = None
+
+    def __post_init__(self) -> None:
+        supported_fields = {"reasoning_content", "reasoning", "reasoning_text"}
+        if self.replay_field is not None and self.replay_field not in supported_fields:
+            raise ValueError(f"unsupported thinking replay field: {self.replay_field!r}")
+
+    @property
+    def type(self) -> str:
+        return "thinking"
+
+    def to_dict(self) -> JsonObject:
+        result: JsonObject = {"type": self.type, "thinking": self.thinking}
+        if self.replay_field is not None:
+            result["replay_field"] = self.replay_field
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class ToolCall:
     id: str
     name: str
@@ -61,7 +82,7 @@ class ToolCall:
 
 
 UserContent = TextBlock
-AssistantContent = Union[TextBlock, ToolCall]
+AssistantContent = Union[TextBlock, ThinkingBlock, ToolCall]
 ToolResultContent = TextBlock
 
 
@@ -116,6 +137,12 @@ class AssistantMessage:
     @property
     def text(self) -> str:
         return "".join(block.text for block in self.content if isinstance(block, TextBlock))
+
+    @property
+    def thinking(self) -> str:
+        return "".join(
+            block.thinking for block in self.content if isinstance(block, ThinkingBlock)
+        )
 
     @property
     def tool_calls(self) -> tuple[ToolCall, ...]:
@@ -289,6 +316,11 @@ def _assistant_content_from_dict(value: object) -> AssistantContent:
     block = _content_mapping(value)
     if block.get("type") == "text":
         return TextBlock(_required_string(block, "text"))
+    if block.get("type") == "thinking":
+        return ThinkingBlock(
+            thinking=_required_string(block, "thinking"),
+            replay_field=_optional_string(block, "replay_field"),
+        )
     if block.get("type") == "tool_call":
         arguments = block.get("arguments", {})
         if not isinstance(arguments, dict) or not all(isinstance(key, str) for key in arguments):

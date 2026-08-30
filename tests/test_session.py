@@ -5,6 +5,7 @@ from coding_agent.core.file_state import FileVersion
 from coding_agent.core.messages import (
     AssistantMessage,
     TextBlock,
+    ThinkingBlock,
     ToolCall,
     ToolResultMessage,
     UserMessage,
@@ -23,7 +24,13 @@ class SessionStateTests(unittest.TestCase):
             messages=[
                 UserMessage.from_text("read the file", timestamp=10),
                 AssistantMessage(
-                    content=(ToolCall(id="call-1", name="read_file"),),
+                    content=(
+                        ThinkingBlock(
+                            "The file is relevant.",
+                            replay_field="reasoning_content",
+                        ),
+                        ToolCall(id="call-1", name="read_file"),
+                    ),
                     provider="fake",
                     model="fake-model",
                     stop_reason=StopReason.TOOL_USE,
@@ -55,7 +62,7 @@ class SessionStateTests(unittest.TestCase):
         self.assertEqual(restored, state)
         restored.validate()
 
-    def test_schema_version_one_is_migrated_with_an_empty_version_table(self) -> None:
+    def test_legacy_schema_versions_are_migrated(self) -> None:
         state = SessionState(
             session_id="session-1",
             workspace_root="/tmp/workspace",
@@ -67,8 +74,13 @@ class SessionStateTests(unittest.TestCase):
 
         restored = SessionState.from_dict(legacy)
 
-        self.assertEqual(restored.schema_version, 2)
+        self.assertEqual(restored.schema_version, 3)
         self.assertEqual(restored.read_file_versions, {})
+
+        version_two = state.to_dict()
+        version_two["schema_version"] = 2
+        restored_two = SessionState.from_dict(version_two)
+        self.assertEqual(restored_two.schema_version, 3)
 
         current_without_versions = state.to_dict()
         del current_without_versions["read_file_versions"]

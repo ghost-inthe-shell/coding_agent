@@ -18,8 +18,7 @@ from .messages import (
 from .types import SessionStatus
 from .usage import Usage
 
-
-CURRENT_SESSION_SCHEMA_VERSION = 2
+CURRENT_SESSION_SCHEMA_VERSION = 3
 
 
 @dataclass(slots=True)
@@ -88,10 +87,12 @@ class SessionState:
         messages = data.get("messages", [])
         usage = data.get("usage", {})
         schema_version = _required_integer(data, "schema_version")
-        if schema_version not in {1, CURRENT_SESSION_SCHEMA_VERSION}:
+        if schema_version not in {1, 2, CURRENT_SESSION_SCHEMA_VERSION}:
             raise ValueError(f"unsupported session schema version: {schema_version}")
-        if schema_version == CURRENT_SESSION_SCHEMA_VERSION and "read_file_versions" not in data:
-            raise ValueError("read_file_versions is required in session schema version 2")
+        if schema_version >= 2 and "read_file_versions" not in data:
+            raise ValueError(
+                f"read_file_versions is required in session schema version {schema_version}"
+            )
         versions = data.get("read_file_versions", {})
         if not isinstance(messages, list):
             raise ValueError("messages must be a list")

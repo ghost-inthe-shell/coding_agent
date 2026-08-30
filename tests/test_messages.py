@@ -5,6 +5,7 @@ from coding_agent.core.messages import (
     AssistantMessage,
     ProtocolError,
     TextBlock,
+    ThinkingBlock,
     ToolCall,
     ToolResultMessage,
     UserMessage,
@@ -25,6 +26,10 @@ class MessageProtocolTests(unittest.TestCase):
             UserMessage.from_text("inspect the repository", timestamp=100),
             AssistantMessage(
                 content=(
+                    ThinkingBlock(
+                        "I should inspect the requested file.",
+                        replay_field="reasoning_content",
+                    ),
                     TextBlock("I will inspect it."),
                     ToolCall(
                         id="call-1",
@@ -61,7 +66,15 @@ class MessageProtocolTests(unittest.TestCase):
         decoded = [message_from_dict(message) for message in encoded]
 
         self.assertEqual(decoded, messages)
+        assistant = decoded[1]
+        assert isinstance(assistant, AssistantMessage)
+        self.assertEqual(assistant.text, "I will inspect it.")
+        self.assertEqual(assistant.thinking, "I should inspect the requested file.")
         validate_message_sequence(decoded)
+
+    def test_thinking_replay_field_is_strict(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported thinking replay field"):
+            ThinkingBlock("reasoning", replay_field="provider_private_field")
 
     def test_invalid_tool_arguments_are_preserved_for_error_feedback(self) -> None:
         call = ToolCall(
