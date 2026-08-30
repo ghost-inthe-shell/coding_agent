@@ -127,6 +127,20 @@ class InteractivePermissionHandlerTests(unittest.TestCase):
                 self.assertEqual(decision, PermissionDecision.DENY)
                 self.assertIn("Denied", output.getvalue())
 
+    def test_write_request_uses_workspace_prompt(self) -> None:
+        output = StringIO()
+        handler = InteractivePermissionHandler(
+            input_stream=StringIO("y\n"),
+            output_stream=output,
+        )
+
+        decision = handler(
+            PermissionRequest(PermissionOperation.WRITE, "/workspace/new.py")
+        )
+
+        self.assertEqual(decision, PermissionDecision.ALLOW)
+        self.assertIn("write in the workspace", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -51,6 +51,10 @@ requested、model responded、tool started、tool finished、turn finished。不
 处理器、用户拒绝、中断或输入结束时均拒绝。批准只允许工具尝试本次读取，操作系统权限始终
 是最后一层约束。workspace 外写入仍拒绝。
 
+写路径策略分为两个阶段：先解析真实路径并硬拒绝 workspace 外、agent artifact 和符号链接
+逃逸；写工具完成自身校验后，再对 workspace 内目标逐次同步确认且不记忆授权。这样无效的
+写入请求不会提前打扰用户。
+
 ## 工具输出
 
 所有结果统一经过 `ToolResultProcessor`。模型最多看到 50,000 字符；更长的文本以头尾预览

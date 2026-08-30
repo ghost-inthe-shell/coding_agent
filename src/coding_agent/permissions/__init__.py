@@ -1,6 +1,6 @@
 """Permission requests and concrete filesystem policies."""
 
-from .paths import PathAccessDenied, ReadPathPolicy
+from .paths import PathAccessDenied, ReadPathPolicy, WritePathPolicy
 from .protocol import (
     PermissionDecision,
     PermissionHandler,
@@ -15,4 +15,5 @@ __all__ = [
     "PermissionOperation",
     "PermissionRequest",
     "ReadPathPolicy",
+    "WritePathPolicy",
 ]

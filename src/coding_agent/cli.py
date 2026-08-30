@@ -13,7 +13,11 @@ from coding_agent.core.results import RunResult
 from coding_agent.core.runtime import Runtime
 from coding_agent.core.session import SessionState
 from coding_agent.core.types import RunStatus
-from coding_agent.permissions import PermissionDecision, PermissionRequest
+from coding_agent.permissions import (
+    PermissionDecision,
+    PermissionOperation,
+    PermissionRequest,
+)
 from coding_agent.providers import AnthropicProvider, LLMProvider, OpenAICompatibleProvider
 from coding_agent.tools import GlobFilesTool, GrepSearchTool, ReadFileTool
 
@@ -42,9 +46,14 @@ class InteractivePermissionHandler:
         self._output_stream = output_stream
 
     def __call__(self, request: PermissionRequest) -> PermissionDecision:
+        action = (
+            "read outside the workspace"
+            if request.operation is PermissionOperation.READ
+            else "write in the workspace"
+        )
         _write(
             self._output_stream,
-            f"Allow {request.operation.value} outside the workspace?\n"
+            f"Allow {action}?\n"
             f"  {request.target}\n"
             "Approve once? [y/N] ",
         )
