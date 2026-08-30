@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Protocol, TextIO
 from uuid import uuid4
 
+try:
+    import readline as _readline
+except ImportError:  # pragma: no cover - readline is expected on Linux
+    _readline = None
+
 from coding_agent.core.results import RunResult
 from coding_agent.core.runtime import Runtime
 from coding_agent.core.session import SessionState
@@ -68,11 +73,14 @@ class InteractivePermissionHandler:
         _write(
             self._output_stream,
             f"{question}\n"
-            f"  {label}: {displayed_target}\n"
-            "Approve once? [y/N] ",
+            f"  {label}: {displayed_target}\n",
         )
         try:
-            answer = self._input_stream.readline()
+            answer = _read_line(
+                "Approve once? [y/N] ",
+                self._input_stream,
+                self._output_stream,
+            )
         except KeyboardInterrupt:
             _write(self._output_stream, "\nDenied.\n")
             return PermissionDecision.DENY
@@ -98,8 +106,7 @@ def run_repl(
     _write(output_stream, f"Coding Agent ({state.workspace_root})\nType /help for commands.\n")
     while True:
         try:
-            _write(output_stream, "> ")
-            line = input_stream.readline()
+            line = _read_line("> ", input_stream, output_stream)
         except KeyboardInterrupt:
             _write(output_stream, "\n")
             return 130
@@ -220,6 +227,24 @@ def _print_result(result: RunResult, output_stream: TextIO) -> None:
 def _write(stream: TextIO, text: str) -> None:
     stream.write(text)
     stream.flush()
+
+
+def _read_line(prompt: str, input_stream: TextIO, output_stream: TextIO) -> str:
+    """Read one line, using GNU readline only for the real interactive terminal."""
+
+    if (
+        _readline is not None
+        and input_stream is sys.stdin
+        and output_stream is sys.stdout
+        and input_stream.isatty()
+    ):
+        try:
+            return input(prompt)
+        except EOFError:
+            return ""
+
+    _write(output_stream, prompt)
+    return input_stream.readline()
 
 
 if __name__ == "__main__":

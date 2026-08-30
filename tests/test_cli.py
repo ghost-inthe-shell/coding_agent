@@ -2,7 +2,9 @@ import tempfile
 import unittest
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
+from coding_agent import cli
 from coding_agent.cli import InteractivePermissionHandler, run_repl
 from coding_agent.core.results import RunResult
 from coding_agent.core.session import SessionState
@@ -18,6 +20,11 @@ class RecordingRuntime:
     def run_turn(self, state: SessionState, user_input: str) -> RunResult:
         self.calls.append((state, user_input))
         return next(self.results)
+
+
+class InteractiveStringIO(StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 class ReplTests(unittest.TestCase):
@@ -93,6 +100,52 @@ class ReplTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("[provider_error] offline", output.getvalue())
+
+    def test_real_tty_uses_terminal_input_editor(self) -> None:
+        runtime = RecordingRuntime(
+            [RunResult(status=RunStatus.COMPLETED, final_text="answer")]
+        )
+        input_stream = InteractiveStringIO()
+        output_stream = InteractiveStringIO()
+
+        with (
+            patch.object(cli.sys, "stdin", input_stream),
+            patch.object(cli.sys, "stdout", output_stream),
+            patch("builtins.input", side_effect=["edited question", "/exit"]) as terminal_input,
+        ):
+            exit_code = run_repl(
+                runtime,
+                self.state,
+                input_stream=input_stream,
+                output_stream=output_stream,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual([call[1] for call in runtime.calls], ["edited question"])
+        self.assertEqual(
+            [call.args[0] for call in terminal_input.call_args_list],
+            ["> ", "> "],
+        )
+
+    def test_terminal_eof_uses_normal_repl_exit(self) -> None:
+        runtime = RecordingRuntime([])
+        input_stream = InteractiveStringIO()
+        output_stream = InteractiveStringIO()
+
+        with (
+            patch.object(cli.sys, "stdin", input_stream),
+            patch.object(cli.sys, "stdout", output_stream),
+            patch("builtins.input", side_effect=EOFError),
+        ):
+            exit_code = run_repl(
+                runtime,
+                self.state,
+                input_stream=input_stream,
+                output_stream=output_stream,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(runtime.calls, [])
 
 
 class InteractivePermissionHandlerTests(unittest.TestCase):
