@@ -5,10 +5,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from coding_agent import cli
-from coding_agent.cli import InteractivePermissionHandler, run_repl
+from coding_agent.cli import InteractivePermissionHandler, build_parser, run_repl
 from coding_agent.core.results import RunResult
 from coding_agent.core.session import SessionState
 from coding_agent.core.types import RunStatus
+from coding_agent.core.usage import Usage
 from coding_agent.permissions import PermissionDecision, PermissionOperation, PermissionRequest
 
 
@@ -85,6 +86,10 @@ class ReplTests(unittest.TestCase):
                 RunResult(
                     status=RunStatus.PROVIDER_ERROR,
                     final_text="",
+                    usage=Usage(output_tokens=12, reasoning_tokens=7),
+                    model_turns=2,
+                    tool_calls=1,
+                    max_output_tokens=16_384,
                     error_message="offline",
                 )
             ]
@@ -99,7 +104,18 @@ class ReplTests(unittest.TestCase):
         )
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("[provider_error] offline", output.getvalue())
+        rendered = output.getvalue()
+        self.assertIn("[provider_error] offline", rendered)
+        self.assertIn("model_turns=2", rendered)
+        self.assertIn("tool_calls=1", rendered)
+        self.assertIn("output_tokens=12", rendered)
+        self.assertIn("reasoning_tokens=7", rendered)
+        self.assertIn("max_output_tokens_per_call=16384", rendered)
+
+    def test_parser_uses_shared_default_output_limit(self) -> None:
+        arguments = build_parser().parse_args(["--model", "model"])
+
+        self.assertEqual(arguments.max_tokens, 16_384)
 
     def test_real_tty_uses_terminal_input_editor(self) -> None:
         runtime = RecordingRuntime(

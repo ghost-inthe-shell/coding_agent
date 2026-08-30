@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from coding_agent.permissions import PermissionHandler
@@ -21,7 +21,7 @@ from .events import (
     TurnStarted,
     RuntimeEvent,
 )
-from .messages import AssistantMessage, ToolCall, UserMessage
+from .messages import AssistantMessage, UserMessage
 from .results import RunResult, ToolResult
 from .session import SessionState
 from .types import RunStatus, SessionStatus, StopReason
@@ -261,6 +261,11 @@ class Runtime:
         return message
 
     def _finish(self, state: SessionState, result: RunResult) -> RunResult:
+        if result.max_output_tokens is None:
+            result = replace(
+                result,
+                max_output_tokens=self._provider.max_output_tokens,
+            )
         if result.status in {RunStatus.COMPLETED, RunStatus.LIMIT_REACHED}:
             state.status = SessionStatus.IDLE
         elif result.status is RunStatus.INTERRUPTED:

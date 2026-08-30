@@ -36,9 +36,14 @@ class EchoTool(Tool[EchoInput]):
 
 
 class SequenceProvider(LLMProvider):
-    def __init__(self, messages):
+    def __init__(self, messages, *, max_output_tokens=2048):
         self.messages = deque(messages)
         self.requests: list[CompletionRequest] = []
+        self._max_output_tokens = max_output_tokens
+
+    @property
+    def max_output_tokens(self) -> int | None:
+        return self._max_output_tokens
 
     def complete(self, request: CompletionRequest) -> AssistantMessage:
         self.requests.append(request)
@@ -90,7 +95,10 @@ class RuntimeTests(unittest.TestCase):
         events = []
         state = self.state()
         tool = EchoTool()
-        permission_handler = lambda request: PermissionDecision.ALLOW
+
+        def permission_handler(request: PermissionRequest) -> PermissionDecision:
+            return PermissionDecision.ALLOW
+
         runtime = Runtime(
             provider,
             (tool,),
@@ -103,6 +111,7 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(result.status, RunStatus.COMPLETED)
         self.assertEqual(result.final_text, "done")
+        self.assertEqual(result.max_output_tokens, 2048)
         self.assertEqual(provider.requests[0].system_prompt, "Original prompt snapshot.")
         self.assertIsInstance(state.messages[2], ToolResultMessage)
         self.assertEqual(tool.permission_handlers, [permission_handler])
@@ -131,6 +140,7 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(result.status, RunStatus.LIMIT_REACHED)
         self.assertEqual(result.tool_calls, 1)
+        self.assertEqual(result.max_output_tokens, 2048)
         self.assertEqual(result.final_text, "budget summary")
         self.assertEqual(provider.requests[-1].tools, ())
         tool_results = [m for m in state.messages if isinstance(m, ToolResultMessage)]
@@ -251,7 +261,7 @@ class RuntimeTests(unittest.TestCase):
         )
 
         result = Runtime(
-            SequenceProvider((partial,)),
+            SequenceProvider((partial,), max_output_tokens=16),
             (),
             state_home=self.root,
         ).run_turn(self.state(), "work")
@@ -259,6 +269,26 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result.status, RunStatus.LIMIT_REACHED)
         self.assertEqual(result.final_text, "partial answer")
         self.assertEqual(result.stop_reason, StopReason.LENGTH)
+        self.assertEqual(result.max_output_tokens, 16)
+
+    def test_model_call_budget_has_a_distinct_result(self) -> None:
+        provider = SequenceProvider(
+            (tool_message(ToolCall(id="call-1", name="echo", arguments={"text": "x"})),)
+        )
+        runtime = Runtime(
+            provider,
+            (EchoTool(),),
+            limits=RuntimeLimits(max_model_calls=1, max_tool_calls=2),
+            state_home=self.root,
+        )
+
+        result = runtime.run_turn(self.state(), "work")
+
+        self.assertEqual(result.status, RunStatus.LIMIT_REACHED)
+        self.assertEqual(result.error_message, "turn model-call limit reached")
+        self.assertEqual(result.model_turns, 1)
+        self.assertEqual(result.tool_calls, 1)
+        self.assertEqual(result.max_output_tokens, 2048)
 
 
 if __name__ == "__main__":

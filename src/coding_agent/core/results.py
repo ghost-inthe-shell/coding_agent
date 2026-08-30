@@ -59,9 +59,12 @@ class RunResult:
     usage: Usage = field(default_factory=Usage)
     model_turns: int = 0
     tool_calls: int = 0
+    max_output_tokens: int | None = None
     stop_reason: StopReason | None = None
     error_message: str | None = None
 
     def __post_init__(self) -> None:
         if self.model_turns < 0 or self.tool_calls < 0:
             raise ValueError("run counters must be non-negative")
+        if self.max_output_tokens is not None and self.max_output_tokens <= 0:
+            raise ValueError("max_output_tokens must be positive when provided")

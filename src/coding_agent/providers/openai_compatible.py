@@ -19,7 +19,7 @@ from coding_agent.core.types import StopReason
 from coding_agent.core.usage import Usage
 from coding_agent.tools.base import ToolSpec
 
-from .base import CompletionRequest, LLMProvider, ProviderError
+from .base import DEFAULT_MAX_OUTPUT_TOKENS, CompletionRequest, LLMProvider, ProviderError
 
 _REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
 
@@ -31,7 +31,7 @@ class OpenAICompatibleProvider(LLMProvider):
         *,
         api_key: str | None = None,
         base_url: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         client: Any | None = None,
     ) -> None:
         if not model:
@@ -52,6 +52,10 @@ class OpenAICompatibleProvider(LLMProvider):
                 "pip install 'coding-agent[openai]'"
             ) from exc
         self._client = OpenAI(api_key=api_key, base_url=base_url)
+
+    @property
+    def max_output_tokens(self) -> int:
+        return self.max_tokens
 
     def complete(self, request: CompletionRequest) -> AssistantMessage:
         arguments: dict[str, Any] = {

@@ -10,7 +10,12 @@ from coding_agent.core.messages import (
     UserMessage,
 )
 from coding_agent.core.types import StopReason, ToolResultStatus
-from coding_agent.providers import CompletionRequest, OpenAICompatibleProvider, ProviderError
+from coding_agent.providers import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    CompletionRequest,
+    OpenAICompatibleProvider,
+    ProviderError,
+)
 from coding_agent.tools.base import ToolSpec
 
 
@@ -108,7 +113,9 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
         self.assertEqual(result.usage.output_tokens, 5)
         self.assertEqual(result.usage.cache_read_tokens, 4)
         self.assertEqual(result.usage.reasoning_tokens, 2)
+        self.assertEqual(provider.max_output_tokens, DEFAULT_MAX_OUTPUT_TOKENS)
         sent = completions.arguments
+        self.assertEqual(sent["max_tokens"], DEFAULT_MAX_OUTPUT_TOKENS)
         self.assertEqual(sent["messages"][0], {"role": "system", "content": "System prompt"})
         self.assertEqual(sent["messages"][2]["reasoning_content"], "Inspect the file.")
         self.assertEqual(sent["messages"][2]["tool_calls"][0]["function"]["name"], "read_file")

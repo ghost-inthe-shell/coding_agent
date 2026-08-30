@@ -19,7 +19,7 @@ from coding_agent.core.types import StopReason
 from coding_agent.core.usage import Usage
 from coding_agent.tools.base import ToolSpec
 
-from .base import CompletionRequest, LLMProvider, ProviderError
+from .base import DEFAULT_MAX_OUTPUT_TOKENS, CompletionRequest, LLMProvider, ProviderError
 
 
 class AnthropicProvider(LLMProvider):
@@ -28,7 +28,7 @@ class AnthropicProvider(LLMProvider):
         model: str,
         *,
         api_key: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         client: Any | None = None,
     ) -> None:
         if not model:
@@ -49,6 +49,10 @@ class AnthropicProvider(LLMProvider):
                 "pip install 'coding-agent[anthropic]'"
             ) from exc
         self._client = Anthropic(api_key=api_key)
+
+    @property
+    def max_output_tokens(self) -> int:
+        return self.max_tokens
 
     def complete(self, request: CompletionRequest) -> AssistantMessage:
         arguments: dict[str, Any] = {

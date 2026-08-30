@@ -119,7 +119,8 @@ REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看
 或按 Ctrl-D 退出。workspace 外的只读工具调用会显示规范化路径并逐次请求确认。第一版只
 接收单行输入；Linux 交互式终端使用 GNU readline 提供光标移动、退格和当前进程内
 历史。不提供 TUI、流式输出或会话恢复。文件写入和每条 Shell 命令也会逐次请求确认；
-Shell 固定在 workspace 根目录启动，并使用 120 秒默认超时。
+Shell 固定在 workspace 根目录启动，并使用 120 秒默认超时。模型每次调用默认最多生成
+16,384 tokens，可通过 `--max-tokens` 调整。
 
 ## 验证
 

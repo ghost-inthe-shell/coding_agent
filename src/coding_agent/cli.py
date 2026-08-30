@@ -24,7 +24,12 @@ from coding_agent.permissions import (
     PermissionOperation,
     PermissionRequest,
 )
-from coding_agent.providers import AnthropicProvider, LLMProvider, OpenAICompatibleProvider
+from coding_agent.providers import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    AnthropicProvider,
+    LLMProvider,
+    OpenAICompatibleProvider,
+)
 from coding_agent.tools import (
     EditFileTool,
     GlobFilesTool,
@@ -152,8 +157,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-tokens",
         type=_positive_int,
-        default=4096,
-        help="maximum output tokens per model call (default: 4096)",
+        default=DEFAULT_MAX_OUTPUT_TOKENS,
+        help=(
+            "maximum output tokens per model call "
+            f"(default: {DEFAULT_MAX_OUTPUT_TOKENS})"
+        ),
     )
     return parser
 
@@ -221,7 +229,20 @@ def _print_result(result: RunResult, output_stream: TextIO) -> None:
         _write(output_stream, f"assistant> {result.final_text}\n")
     if result.status is not RunStatus.COMPLETED:
         detail = result.error_message or result.status.value
-        _write(output_stream, f"[{result.status.value}] {detail}\n")
+        diagnostics = [
+            f"model_turns={result.model_turns}",
+            f"tool_calls={result.tool_calls}",
+            f"output_tokens={result.usage.output_tokens}",
+            f"reasoning_tokens={result.usage.reasoning_tokens}",
+        ]
+        if result.max_output_tokens is not None:
+            diagnostics.append(
+                f"max_output_tokens_per_call={result.max_output_tokens}"
+            )
+        _write(
+            output_stream,
+            f"[{result.status.value}] {detail} ({', '.join(diagnostics)})\n",
+        )
 
 
 def _write(stream: TextIO, text: str) -> None:

@@ -35,6 +35,9 @@ tool result 始终按原顺序完整配对。单轮默认最多调用模型 8 �
 会发出不带工具的最终请求。即使该请求返回了有用文本，`RunResult` 仍标记为
 `limit_reached`。
 
+两个 Provider 的单次默认输出上限统一为 16,384 tokens。`RunResult.max_output_tokens`
+记录单次请求上限，而 `RunResult.usage.output_tokens` 是整个 turn 多次模型调用的累计值。
+
 若模型因输出 token 限制停止，纯文本作为部分结果以 `limit_reached` 结束；若响应包含 tool
 calls，Runtime 不执行整批调用，而是逐个生成配对错误结果，并在模型调用预算允许时继续循环。
 

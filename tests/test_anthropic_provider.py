@@ -10,7 +10,12 @@ from coding_agent.core.messages import (
     UserMessage,
 )
 from coding_agent.core.types import StopReason, ToolResultStatus
-from coding_agent.providers import AnthropicProvider, CompletionRequest, ProviderError
+from coding_agent.providers import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    AnthropicProvider,
+    CompletionRequest,
+    ProviderError,
+)
 from coding_agent.tools.base import ToolSpec
 
 
@@ -115,6 +120,8 @@ class AnthropicProviderTests(unittest.TestCase):
         self.assertEqual(result.usage.output_tokens, 6)
         self.assertEqual(result.usage.cache_read_tokens, 8)
         self.assertEqual(result.usage.cache_write_tokens, 3)
+        self.assertEqual(provider.max_output_tokens, DEFAULT_MAX_OUTPUT_TOKENS)
+        self.assertEqual(sent["max_tokens"], DEFAULT_MAX_OUTPUT_TOKENS)
 
     def test_converts_tool_use_response(self) -> None:
         tool_use = namespace(
