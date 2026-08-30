@@ -10,6 +10,7 @@ from coding_agent.core.messages import (
     AssistantMessage,
     Message,
     TextBlock,
+    ThinkingBlock,
     ToolCall,
     ToolResultMessage,
     UserMessage,
@@ -19,6 +20,8 @@ from coding_agent.core.usage import Usage
 from coding_agent.tools.base import ToolSpec
 
 from .base import CompletionRequest, LLMProvider, ProviderError
+
+_REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -73,7 +76,10 @@ class OpenAICompatibleProvider(LLMProvider):
         if message is None:
             raise ProviderError("OpenAI-compatible response contained no message")
 
-        content: list[TextBlock | ToolCall] = []
+        content: list[TextBlock | ThinkingBlock | ToolCall] = []
+        thinking = _extract_thinking(message)
+        if thinking is not None:
+            content.append(thinking)
         text = _field(message, "content")
         if text:
             if not isinstance(text, str):
@@ -145,6 +151,12 @@ def _convert_message(message: Message) -> dict[str, Any]:
         "role": "assistant",
         "content": message.text or None,
     }
+    for block in message.content:
+        if isinstance(block, ThinkingBlock) and block.replay_field is not None:
+            prior = result.get(block.replay_field, "")
+            if not isinstance(prior, str):
+                raise AssertionError("thinking replay field collided with a non-text value")
+            result[block.replay_field] = prior + block.thinking
     if message.tool_calls:
         result["tool_calls"] = [
             {
@@ -204,6 +216,19 @@ def _parse_arguments(raw_arguments: str) -> tuple[dict[str, Any], str | None]:
     if not isinstance(parsed, dict):
         return {}, "tool arguments must decode to a JSON object"
     return parsed, None
+
+
+def _extract_thinking(message: Any) -> ThinkingBlock | None:
+    for field_name in _REASONING_FIELDS:
+        value = _field(message, field_name)
+        if value is None or value == "":
+            continue
+        if not isinstance(value, str):
+            raise ProviderError(
+                f"OpenAI-compatible response {field_name} was not text"
+            )
+        return ThinkingBlock(value, replay_field=field_name)
+    return None
 
 
 def _text(blocks: Sequence[TextBlock]) -> str:

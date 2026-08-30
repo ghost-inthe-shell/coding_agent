@@ -4,6 +4,7 @@ import unittest
 from coding_agent.core.messages import (
     AssistantMessage,
     TextBlock,
+    ThinkingBlock,
     ToolCall,
     ToolResultMessage,
     UserMessage,
@@ -57,6 +58,10 @@ class AnthropicProviderTests(unittest.TestCase):
         provider = AnthropicProvider("requested-model", client=FakeClient(messages))
         assistant = AssistantMessage(
             content=(
+                ThinkingBlock(
+                    "Foreign provider reasoning.",
+                    replay_field="reasoning_content",
+                ),
                 TextBlock("checking"),
                 ToolCall(id="call-1", name="read_file", arguments={"path": "a.py"}),
                 ToolCall(id="call-2", name="grep_search", arguments={"pattern": "x"}),
@@ -96,6 +101,7 @@ class AnthropicProviderTests(unittest.TestCase):
         sent = messages.arguments
         self.assertEqual(sent["system"], "System prompt")
         self.assertEqual(len(sent["messages"]), 3)
+        self.assertEqual(sent["messages"][1]["content"][0], {"type": "text", "text": "checking"})
         result_blocks = sent["messages"][2]["content"]
         self.assertEqual(
             [block["tool_use_id"] for block in result_blocks],

@@ -20,7 +20,9 @@ one-shot 模式、TUI、流式输出、多行编辑或会话恢复。
   对象不得进入 SessionState。
 - `AssistantMessage` 可包含标准化 `ThinkingBlock`；它不并入用户可见文本，但会随会话
   持久化。可选 `replay_field` 只记录 OpenAI-compatible 接口回传推理内容所需的字段名。
-- OpenAI-compatible Provider 使用同步 Chat Completions，以兼容常见的 OpenAI 网关。
+- OpenAI-compatible Provider 使用同步 Chat Completions，将响应中第一个非空的
+  `reasoning_content`/`reasoning`/`reasoning_text` 标准化为 `ThinkingBlock`，并在后续请求
+  中按原字段回传。
 - Anthropic Provider 使用同步 Messages API，并把连续 tool results 合并为一个 user 消息。
 - 核心消息和会话状态使用 dataclass。Pydantic v2 只用于工具入参的严格校验
   （`strict=True`、禁止额外字段）和 JSON Schema 生成。

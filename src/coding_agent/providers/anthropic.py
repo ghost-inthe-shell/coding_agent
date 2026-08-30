@@ -10,6 +10,7 @@ from coding_agent.core.messages import (
     AssistantMessage,
     Message,
     TextBlock,
+    ThinkingBlock,
     ToolCall,
     ToolResultMessage,
     UserMessage,
@@ -157,7 +158,7 @@ def _convert_message(message: Message) -> dict[str, Any]:
     for block in message.content:
         if isinstance(block, TextBlock):
             content.append({"type": "text", "text": block.text})
-        else:
+        elif isinstance(block, ToolCall):
             content.append(
                 {
                     "type": "tool_use",
@@ -166,6 +167,8 @@ def _convert_message(message: Message) -> dict[str, Any]:
                     "input": block.arguments,
                 }
             )
+        elif not isinstance(block, ThinkingBlock):
+            raise AssertionError(f"unsupported assistant content block: {type(block)!r}")
     return {"role": "assistant", "content": content}
 
 

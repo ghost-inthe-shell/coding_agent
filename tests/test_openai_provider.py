@@ -4,6 +4,7 @@ import unittest
 from coding_agent.core.messages import (
     AssistantMessage,
     TextBlock,
+    ThinkingBlock,
     ToolCall,
     ToolResultMessage,
     UserMessage,
@@ -35,14 +36,24 @@ class FakeClient:
         self.chat = namespace(completions=completions)
 
 
-def response(*, content="done", tool_calls=None, finish_reason="stop"):
+def response(
+    *,
+    content="done",
+    tool_calls=None,
+    finish_reason="stop",
+    **message_fields,
+):
     return namespace(
         id="response-1",
         model="actual-model",
         choices=(
             namespace(
                 finish_reason=finish_reason,
-                message=namespace(content=content, tool_calls=tool_calls or ()),
+                message=namespace(
+                    content=content,
+                    tool_calls=tool_calls or (),
+                    **message_fields,
+                ),
             ),
         ),
         usage=namespace(
@@ -59,7 +70,10 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
         completions = FakeCompletions(response())
         provider = OpenAICompatibleProvider("requested-model", client=FakeClient(completions))
         assistant = AssistantMessage(
-            content=(ToolCall(id="call-1", name="read_file", arguments={"path": "a.py"}),),
+            content=(
+                ThinkingBlock("Inspect the file.", replay_field="reasoning_content"),
+                ToolCall(id="call-1", name="read_file", arguments={"path": "a.py"}),
+            ),
             provider="openai-compatible",
             model="requested-model",
             stop_reason=StopReason.TOOL_USE,
@@ -96,6 +110,7 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
         self.assertEqual(result.usage.reasoning_tokens, 2)
         sent = completions.arguments
         self.assertEqual(sent["messages"][0], {"role": "system", "content": "System prompt"})
+        self.assertEqual(sent["messages"][2]["reasoning_content"], "Inspect the file.")
         self.assertEqual(sent["messages"][2]["tool_calls"][0]["function"]["name"], "read_file")
         self.assertEqual(sent["messages"][3]["role"], "tool")
         self.assertEqual(sent["tools"][0]["function"]["parameters"], {"type": "object"})
@@ -120,6 +135,61 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
         self.assertEqual(result.tool_calls[0].raw_arguments, "{not-json")
         self.assertIsNotNone(result.tool_calls[0].parse_error)
         self.assertEqual(result.tool_calls[0].arguments, {})
+
+    def test_extracts_first_nonempty_reasoning_field(self) -> None:
+        provider = OpenAICompatibleProvider(
+            "model",
+            client=FakeClient(
+                FakeCompletions(
+                    response(
+                        reasoning_content="primary reasoning",
+                        reasoning="duplicate reasoning",
+                    )
+                )
+            ),
+        )
+
+        result = provider.complete(CompletionRequest(messages=(), system_prompt="System"))
+
+        self.assertEqual(result.thinking, "primary reasoning")
+        self.assertIsInstance(result.content[0], ThinkingBlock)
+        thinking = result.content[0]
+        assert isinstance(thinking, ThinkingBlock)
+        self.assertEqual(thinking.replay_field, "reasoning_content")
+        self.assertEqual(result.text, "done")
+
+    def test_replays_each_supported_reasoning_field(self) -> None:
+        for field_name in ("reasoning_content", "reasoning", "reasoning_text"):
+            with self.subTest(field_name=field_name):
+                completions = FakeCompletions(response())
+                provider = OpenAICompatibleProvider(
+                    "model", client=FakeClient(completions)
+                )
+                assistant = AssistantMessage(
+                    content=(ThinkingBlock("reasoning", replay_field=field_name),),
+                    provider="openai-compatible",
+                    model="model",
+                )
+
+                provider.complete(
+                    CompletionRequest(
+                        messages=(assistant,),
+                        system_prompt="System",
+                    )
+                )
+
+                self.assertEqual(completions.arguments["messages"][1][field_name], "reasoning")
+
+    def test_rejects_non_text_reasoning_content(self) -> None:
+        provider = OpenAICompatibleProvider(
+            "model",
+            client=FakeClient(
+                FakeCompletions(response(reasoning_content={"unexpected": "object"}))
+            ),
+        )
+
+        with self.assertRaisesRegex(ProviderError, "reasoning_content was not text"):
+            provider.complete(CompletionRequest(messages=(), system_prompt="System"))
 
     def test_maps_length_without_tool_calls(self) -> None:
         provider = OpenAICompatibleProvider(
