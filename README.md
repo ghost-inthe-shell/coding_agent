@@ -25,20 +25,94 @@ src/coding_agent/
 
 ## 运行
 
-OpenAI-compatible API：
+### 首次安装
+
+`coding-agent` 是安装项目时生成的命令行入口，不是系统自带命令。在项目根目录
+创建虚拟环境，并以可编辑模式安装项目及两个 Provider 依赖：
 
 ```bash
-python3 -m pip install -e '.[openai]'
-export OPENAI_API_KEY='...'
-coding-agent --model <model> --workspace <path>
+cd /home/lmz/coding_agent/coding_agent
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[openai,anthropic]'
 ```
 
-自定义兼容网关可增加 `--base-url`。使用 Anthropic Messages API 时：
+只需安装一个 Provider 时，可分别使用 `.[openai]` 或 `.[anthropic]`。
+
+### 在新 Bash 中启动
+
+虚拟环境不会自动跨 Bash 进程生效。每次打开新 Bash 后，首先激活已创建的
+虚拟环境：
 
 ```bash
-python3 -m pip install -e '.[anthropic]'
-export ANTHROPIC_API_KEY='...'
-coding-agent --provider anthropic --model <model> --workspace <path>
+cd /home/lmz/coding_agent/coding_agent
+source .venv/bin/activate
+```
+
+然后加载 OpenAI-compatible 接口配置。`set -a` 会使 `.env` 中没有显式写
+`export` 的变量也能传递给 Python 进程：
+
+```bash
+set -a
+source /home/lmz/.config/coding-agent/test.env
+set +a
+
+mkdir -p /home/lmz/test_agent
+coding-agent \
+  --provider openai-compatible \
+  --workspace /home/lmz/test_agent \
+  --model deepseek-v4-flash \
+  --base-url "$OPENAI_BASE_URL"
+```
+
+`OPENAI_API_KEY` 由 Provider 从环境变量读取；兼容网关的地址通过
+`--base-url` 显式传入。如果使用 OpenAI 官方地址，可省略 `--base-url`。
+
+使用 Anthropic Messages API 时：
+
+```bash
+set -a
+source /home/lmz/.config/coding-agent/test_anthropic.env
+set +a
+
+coding-agent \
+  --provider anthropic \
+  --workspace /home/lmz/test_agent \
+  --model "$CODING_AGENT_TEST_MODEL"
+```
+
+Anthropic Provider 直接从环境变量读取 `ANTHROPIC_API_KEY` 和可选的
+`ANTHROPIC_BASE_URL`，因此不接收 `--base-url`。
+
+也可不激活虚拟环境，直接使用其中的可执行文件：
+
+```bash
+/home/lmz/coding_agent/coding_agent/.venv/bin/coding-agent \
+  --provider openai-compatible \
+  --workspace /home/lmz/test_agent \
+  --model deepseek-v4-flash \
+  --base-url "$OPENAI_BASE_URL"
+```
+
+### `coding-agent: command not found`
+
+该错误表示当前 Bash 的 `PATH` 中没有项目命令，与 `--workspace` 或 `--model`
+参数无关。按顺序检查：
+
+```bash
+cd /home/lmz/coding_agent/coding_agent
+source .venv/bin/activate
+command -v coding-agent
+coding-agent --help
+```
+
+正常情况下，`command -v` 应输出
+`/home/lmz/coding_agent/coding_agent/.venv/bin/coding-agent`。如果 `.venv` 不存在，执行上面的
+“首次安装”；如果它存在但命令仍不存在，在激活后重新执行：
+
+```bash
+python -m pip install -e '.[openai,anthropic]'
 ```
 
 REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看命令，输入 `/exit`
