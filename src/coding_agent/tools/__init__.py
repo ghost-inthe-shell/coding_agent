@@ -8,6 +8,7 @@ from .glob_files import GlobFilesTool
 from .grep_search import GrepSearchTool
 from .read_file import ReadFileTool
 from .result_processor import ToolResultProcessor
+from .run_shell import RunShellTool
 from .write_file import WriteFileTool
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "GlobFilesTool",
     "GrepSearchTool",
     "ReadFileTool",
+    "RunShellTool",
     "Tool",
     "ToolContext",
     "ToolExecutor",

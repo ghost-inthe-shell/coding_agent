@@ -10,6 +10,7 @@ from typing import Protocol
 class PermissionOperation(str, Enum):
     READ = "read"
     WRITE = "write"
+    EXECUTE = "execute"
 
 
 class PermissionDecision(str, Enum):
