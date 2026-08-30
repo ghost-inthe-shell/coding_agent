@@ -55,6 +55,9 @@ requested、model responded、tool started、tool finished、turn finished。不
 逃逸；写工具完成自身校验后，再对 workspace 内目标逐次同步确认且不记忆授权。这样无效的
 写入请求不会提前打扰用户。
 
+`write_file` 只创建新的 UTF-8 文件，保留模型给出的确切内容，不覆盖已有路径，也不自动创建
+父目录。排他创建用于防止确认后出现的文件被覆盖；成功后把新文件登记为可信版本。
+
 ## 工具输出
 
 所有结果统一经过 `ToolResultProcessor`。模型最多看到 50,000 字符；更长的文本以头尾预览

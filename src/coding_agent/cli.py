@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 from pathlib import Path
-import sys
 from typing import Protocol, TextIO
 from uuid import uuid4
 
@@ -19,8 +19,7 @@ from coding_agent.permissions import (
     PermissionRequest,
 )
 from coding_agent.providers import AnthropicProvider, LLMProvider, OpenAICompatibleProvider
-from coding_agent.tools import GlobFilesTool, GrepSearchTool, ReadFileTool
-
+from coding_agent.tools import GlobFilesTool, GrepSearchTool, ReadFileTool, WriteFileTool
 
 HELP_TEXT = """Commands:
   /help  Show this help.
@@ -158,7 +157,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     runtime = Runtime(
         provider,
-        (ReadFileTool(), GlobFilesTool(), GrepSearchTool()),
+        (ReadFileTool(), GlobFilesTool(), GrepSearchTool(), WriteFileTool()),
         permission_handler=InteractivePermissionHandler(),
     )
     state = SessionState.create(uuid4().hex, workspace)

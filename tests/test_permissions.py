@@ -1,8 +1,8 @@
 import os
-from dataclasses import replace
-from pathlib import Path
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
 from coding_agent.permissions import (
     PathAccessDenied,
@@ -111,6 +111,24 @@ class WritePathPolicyTests(unittest.TestCase):
             self.policy.authorize(target, self.context)
 
         self.assertEqual(self.handler.requests, [])
+
+    def test_authorize_rechecks_the_target_after_approval(self) -> None:
+        directory = self.workspace / "during-confirmation"
+        directory.mkdir()
+        outside = self.root / "outside-during-confirmation"
+        outside.mkdir()
+        target = self.policy.resolve("during-confirmation/new.txt", self.context)
+
+        class RetargetingHandler:
+            def __call__(self, request: PermissionRequest) -> PermissionDecision:
+                directory.rmdir()
+                os.symlink(outside, directory)
+                return PermissionDecision.ALLOW
+
+        context = replace(self.context, permission_handler=RetargetingHandler())
+
+        with self.assertRaisesRegex(PathAccessDenied, "outside the workspace"):
+            self.policy.authorize(target, context)
 
     def test_artifact_is_denied_even_when_nested_in_workspace(self) -> None:
         nested_artifact = self.workspace / ".agent-artifacts"

@@ -76,7 +76,12 @@ class WritePathPolicy:
                 )
             )
             if decision is PermissionDecision.ALLOW:
-                return resolved
+                rechecked = self.resolve(str(resolved), context)
+                if rechecked != resolved:
+                    raise PathAccessDenied(
+                        f"write target changed during confirmation: {resolved}"
+                    )
+                return rechecked
         raise PathAccessDenied(f"writing in the workspace was not approved: {resolved}")
 
 
