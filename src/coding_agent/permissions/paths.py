@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from coding_agent.tools.base import ToolContext
+if TYPE_CHECKING:
+    from coding_agent.tools.base import ToolContext
+
+from .protocol import PermissionDecision, PermissionOperation, PermissionRequest
 
 
 class PathAccessDenied(PermissionError):
@@ -14,7 +18,7 @@ class PathAccessDenied(PermissionError):
 
 @dataclass(frozen=True, slots=True)
 class ReadPathPolicy:
-    """Auto-allow only the workspace and this session's artifact directory."""
+    """Auto-allow owned roots and ask once for each outside read."""
 
     def resolve(self, requested_path: str, context: ToolContext) -> Path:
         candidate = Path(requested_path).expanduser()
@@ -29,7 +33,16 @@ class ReadPathPolicy:
         if any(resolved == root or resolved.is_relative_to(root) for root in allowed_roots):
             return resolved
 
-        # TODO: replace denial with an interactive ask/confirm decision.
+        if context.permission_handler is not None:
+            decision = context.permission_handler(
+                PermissionRequest(
+                    operation=PermissionOperation.READ,
+                    target=str(resolved),
+                )
+            )
+            if decision is PermissionDecision.ALLOW:
+                return resolved
+
         raise PathAccessDenied(
-            f"reading outside the workspace requires confirmation: {requested_path}"
+            f"reading outside the workspace was not approved: {requested_path}"
         )

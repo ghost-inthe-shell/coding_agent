@@ -45,8 +45,9 @@ requested、model responded、tool started、tool finished、turn finished。不
 `read_file` 仍使用 offset/limit，因为分页属于读取语义，不是另一套结果限制策略。
 
 解析真实路径后，只自动允许读取 workspace 根目录和当前 session 的 agent artifact 根目录，
-从而阻止符号链接越界。第一版直接拒绝其他路径；未来交互客户端可把拒绝替换成 ask/confirm，
-操作系统权限始终是最后一层约束。
+从而阻止符号链接越界。REPL 对 workspace 外的每次只读调用同步询问且不记忆授权；没有权限
+处理器、用户拒绝、中断或输入结束时均拒绝。批准只允许工具尝试本次读取，操作系统权限始终
+是最后一层约束。workspace 外写入仍拒绝。
 
 ## 工具输出
 

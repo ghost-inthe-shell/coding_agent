@@ -42,7 +42,8 @@ coding-agent --provider anthropic --model <model> --workspace <path>
 ```
 
 REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看命令，输入 `/exit`
-或按 Ctrl-D 退出。第一版只接收单行输入，不提供 TUI、流式输出或会话恢复。
+或按 Ctrl-D 退出。workspace 外的只读工具调用会显示规范化路径并逐次请求确认。第一版只
+接收单行输入，不提供 TUI、流式输出或会话恢复。
 
 ## 验证
 

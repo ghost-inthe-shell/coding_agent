@@ -3,10 +3,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from coding_agent.cli import run_repl
+from coding_agent.cli import InteractivePermissionHandler, run_repl
 from coding_agent.core.results import RunResult
 from coding_agent.core.session import SessionState
 from coding_agent.core.types import RunStatus
+from coding_agent.permissions import PermissionDecision, PermissionOperation, PermissionRequest
 
 
 class RecordingRuntime:
@@ -92,6 +93,39 @@ class ReplTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("[provider_error] offline", output.getvalue())
+
+
+class InteractivePermissionHandlerTests(unittest.TestCase):
+    def test_accepts_yes_for_one_request(self) -> None:
+        output = StringIO()
+        handler = InteractivePermissionHandler(
+            input_stream=StringIO("yes\n"),
+            output_stream=output,
+        )
+
+        decision = handler(
+            PermissionRequest(PermissionOperation.READ, "/outside/file.txt")
+        )
+
+        self.assertEqual(decision, PermissionDecision.ALLOW)
+        self.assertIn("/outside/file.txt", output.getvalue())
+        self.assertIn("Approve once", output.getvalue())
+        self.assertIn("Approved", output.getvalue())
+
+    def test_decline_and_eof_fail_closed(self) -> None:
+        request = PermissionRequest(PermissionOperation.READ, "/outside/file.txt")
+        for answer in ("n\n", ""):
+            with self.subTest(answer=answer):
+                output = StringIO()
+                handler = InteractivePermissionHandler(
+                    input_stream=StringIO(answer),
+                    output_stream=output,
+                )
+
+                decision = handler(request)
+
+                self.assertEqual(decision, PermissionDecision.DENY)
+                self.assertIn("Denied", output.getvalue())
 
 
 if __name__ == "__main__":

@@ -11,8 +11,9 @@ from coding_agent.core.results import ToolResult
 from coding_agent.core.runtime import Runtime, RuntimeLimits
 from coding_agent.core.session import SessionState
 from coding_agent.core.types import RunStatus, StopReason, ToolResultStatus
+from coding_agent.permissions import PermissionDecision, PermissionRequest
 from coding_agent.providers import CompletionRequest, LLMProvider, ProviderError
-from coding_agent.tools import Tool, ToolContext, ToolInput
+from coding_agent.tools import ReadFileTool, Tool, ToolContext, ToolInput
 
 
 class EchoInput(ToolInput):
@@ -26,9 +27,11 @@ class EchoTool(Tool[EchoInput]):
 
     def __init__(self) -> None:
         self.executions: list[str] = []
+        self.permission_handlers = []
 
     def execute(self, arguments: EchoInput, context: ToolContext) -> ToolResult:
         self.executions.append(arguments.text)
+        self.permission_handlers.append(context.permission_handler)
         return ToolResult.from_text(arguments.text)
 
 
@@ -86,7 +89,15 @@ class RuntimeTests(unittest.TestCase):
         )
         events = []
         state = self.state()
-        runtime = Runtime(provider, (EchoTool(),), event_sink=events.append, state_home=self.root)
+        tool = EchoTool()
+        permission_handler = lambda request: PermissionDecision.ALLOW
+        runtime = Runtime(
+            provider,
+            (tool,),
+            event_sink=events.append,
+            state_home=self.root,
+            permission_handler=permission_handler,
+        )
 
         result = runtime.run_turn(state, "work")
 
@@ -94,6 +105,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result.final_text, "done")
         self.assertEqual(provider.requests[0].system_prompt, "Original prompt snapshot.")
         self.assertIsInstance(state.messages[2], ToolResultMessage)
+        self.assertEqual(tool.permission_handlers, [permission_handler])
         state.validate()
         self.assertIsInstance(events[-1], TurnFinished)
 
@@ -137,6 +149,45 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(result.status, RunStatus.PROVIDER_ERROR)
         self.assertEqual(result.error_message, "offline")
+
+    def test_runtime_passes_permission_decision_to_outside_read(self) -> None:
+        outside = self.root / "outside.txt"
+        outside.write_text("approved content\n", encoding="utf-8")
+        provider = SequenceProvider(
+            [
+                tool_message(
+                    ToolCall(
+                        id="call-1",
+                        name="read_file",
+                        arguments={"path": str(outside)},
+                    )
+                ),
+                text_message("done"),
+            ]
+        )
+        requests: list[PermissionRequest] = []
+
+        def allow(request: PermissionRequest) -> PermissionDecision:
+            requests.append(request)
+            return PermissionDecision.ALLOW
+
+        state = self.state()
+        runtime = Runtime(
+            provider,
+            (ReadFileTool(),),
+            state_home=self.root / "state",
+            permission_handler=allow,
+        )
+
+        result = runtime.run_turn(state, "read the outside file")
+
+        self.assertEqual(result.status, RunStatus.COMPLETED)
+        self.assertEqual(len(requests), 1)
+        tool_result = next(
+            message for message in state.messages if isinstance(message, ToolResultMessage)
+        )
+        self.assertEqual(tool_result.status, ToolResultStatus.SUCCESS)
+        self.assertIn("approved content", tool_result.text)
 
     def test_truncated_tool_calls_are_paired_but_never_executed(self) -> None:
         truncated = AssistantMessage(

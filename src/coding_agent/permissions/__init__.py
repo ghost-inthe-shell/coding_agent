@@ -1,6 +1,18 @@
-"""Permission policy package; concrete policies are added with tool execution."""
-"""Filesystem permission policies."""
+"""Permission requests and concrete filesystem policies."""
 
 from .paths import PathAccessDenied, ReadPathPolicy
+from .protocol import (
+    PermissionDecision,
+    PermissionHandler,
+    PermissionOperation,
+    PermissionRequest,
+)
 
-__all__ = ["PathAccessDenied", "ReadPathPolicy"]
+__all__ = [
+    "PathAccessDenied",
+    "PermissionDecision",
+    "PermissionHandler",
+    "PermissionOperation",
+    "PermissionRequest",
+    "ReadPathPolicy",
+]

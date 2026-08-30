@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 from pathlib import Path
 import shutil
 import tempfile
@@ -8,6 +9,7 @@ from unittest.mock import patch
 from coding_agent.core.messages import ToolCall
 from coding_agent.core.results import ToolResult
 from coding_agent.core.types import ToolResultStatus
+from coding_agent.permissions import PermissionDecision, PermissionRequest
 from coding_agent.tools import (
     ArtifactStore,
     GlobFilesTool,
@@ -17,6 +19,16 @@ from coding_agent.tools import (
     ToolExecutor,
     ToolResultProcessor,
 )
+
+
+class RecordingPermissionHandler:
+    def __init__(self, decision: PermissionDecision) -> None:
+        self.decision = decision
+        self.requests: list[PermissionRequest] = []
+
+    def __call__(self, request: PermissionRequest) -> PermissionDecision:
+        self.requests.append(request)
+        return self.decision
 
 
 class ReadOnlyToolTests(unittest.TestCase):
@@ -40,10 +52,17 @@ class ReadOnlyToolTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def execute(self, name: str, arguments: dict, call_id: str = "call-1") -> ToolResult:
+    def execute(
+        self,
+        name: str,
+        arguments: dict,
+        call_id: str = "call-1",
+        *,
+        context: ToolContext | None = None,
+    ) -> ToolResult:
         return self.executor.execute(
             ToolCall(id=call_id, name=name, arguments=arguments),
-            self.context,
+            context or self.context,
         )
 
     def test_read_file_returns_numbered_range_and_version(self) -> None:
@@ -80,6 +99,60 @@ class ReadOnlyToolTests(unittest.TestCase):
 
         self.assertEqual(direct.status, ToolResultStatus.DENIED)
         self.assertEqual(symlink.status, ToolResultStatus.DENIED)
+
+    def test_outside_read_tools_ask_for_each_call_and_can_be_allowed(self) -> None:
+        outside = self.root / "outside"
+        outside.mkdir()
+        note = outside / "note.txt"
+        note.write_text("needle\n", encoding="utf-8")
+        os.symlink(note, self.workspace / "outside-link.txt")
+        handler = RecordingPermissionHandler(PermissionDecision.ALLOW)
+        context = replace(self.context, permission_handler=handler)
+
+        read_result = self.execute(
+            "read_file", {"path": "outside-link.txt"}, "read-outside", context=context
+        )
+        glob_result = self.execute(
+            "glob_files",
+            {"path": str(outside), "pattern": "*.txt"},
+            "glob-outside",
+            context=context,
+        )
+        grep_result = self.execute(
+            "grep_search",
+            {"path": str(outside), "pattern": "needle"},
+            "grep-outside",
+            context=context,
+        )
+
+        self.assertEqual(read_result.status, ToolResultStatus.SUCCESS)
+        self.assertEqual(glob_result.status, ToolResultStatus.SUCCESS)
+        self.assertEqual(grep_result.status, ToolResultStatus.SUCCESS)
+        self.assertEqual(len(handler.requests), 3)
+        self.assertEqual(handler.requests[0].target, str(note.resolve()))
+        self.assertEqual(handler.requests[1].target, str(outside.resolve()))
+        self.assertEqual(handler.requests[2].target, str(outside.resolve()))
+
+    def test_outside_read_is_denied_when_user_declines(self) -> None:
+        outside = self.root / "secret.txt"
+        outside.write_text("secret", encoding="utf-8")
+        handler = RecordingPermissionHandler(PermissionDecision.DENY)
+        context = replace(self.context, permission_handler=handler)
+
+        result = self.execute("read_file", {"path": str(outside)}, context=context)
+
+        self.assertEqual(result.status, ToolResultStatus.DENIED)
+        self.assertEqual(len(handler.requests), 1)
+
+    def test_workspace_read_does_not_call_permission_handler(self) -> None:
+        (self.workspace / "notes.txt").write_text("inside\n", encoding="utf-8")
+        handler = RecordingPermissionHandler(PermissionDecision.DENY)
+        context = replace(self.context, permission_handler=handler)
+
+        result = self.execute("read_file", {"path": "notes.txt"}, context=context)
+
+        self.assertEqual(result.status, ToolResultStatus.SUCCESS)
+        self.assertEqual(handler.requests, [])
 
     def test_agent_owned_artifact_is_auto_readable(self) -> None:
         artifact = self.store.write("source-call", "stored output")

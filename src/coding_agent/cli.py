@@ -13,6 +13,7 @@ from coding_agent.core.results import RunResult
 from coding_agent.core.runtime import Runtime
 from coding_agent.core.session import SessionState
 from coding_agent.core.types import RunStatus
+from coding_agent.permissions import PermissionDecision, PermissionRequest
 from coding_agent.providers import AnthropicProvider, LLMProvider, OpenAICompatibleProvider
 from coding_agent.tools import GlobFilesTool, GrepSearchTool, ReadFileTool
 
@@ -26,6 +27,40 @@ HELP_TEXT = """Commands:
 class _TurnRunner(Protocol):
     def run_turn(self, state: SessionState, user_input: str) -> RunResult:
         ...
+
+
+class InteractivePermissionHandler:
+    """Ask once on the REPL streams; approvals are never remembered."""
+
+    def __init__(
+        self,
+        *,
+        input_stream: TextIO = sys.stdin,
+        output_stream: TextIO = sys.stdout,
+    ) -> None:
+        self._input_stream = input_stream
+        self._output_stream = output_stream
+
+    def __call__(self, request: PermissionRequest) -> PermissionDecision:
+        _write(
+            self._output_stream,
+            f"Allow {request.operation.value} outside the workspace?\n"
+            f"  {request.target}\n"
+            "Approve once? [y/N] ",
+        )
+        try:
+            answer = self._input_stream.readline()
+        except KeyboardInterrupt:
+            _write(self._output_stream, "\nDenied.\n")
+            return PermissionDecision.DENY
+        if answer == "":
+            _write(self._output_stream, "\nDenied.\n")
+            return PermissionDecision.DENY
+        if answer.strip().lower() in {"y", "yes"}:
+            _write(self._output_stream, "Approved.\n")
+            return PermissionDecision.ALLOW
+        _write(self._output_stream, "Denied.\n")
+        return PermissionDecision.DENY
 
 
 def run_repl(
@@ -112,7 +147,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ImportError, ValueError) as exc:
         parser.error(str(exc))
 
-    runtime = Runtime(provider, (ReadFileTool(), GlobFilesTool(), GrepSearchTool()))
+    runtime = Runtime(
+        provider,
+        (ReadFileTool(), GlobFilesTool(), GrepSearchTool()),
+        permission_handler=InteractivePermissionHandler(),
+    )
     state = SessionState.create(uuid4().hex, workspace)
     return run_repl(runtime, state)
 

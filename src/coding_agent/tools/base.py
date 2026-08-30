@@ -1,13 +1,18 @@
 """Minimal typed tool declaration and execution protocol."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
 from coding_agent.core.json_types import JsonObject
 from coding_agent.core.results import ToolResult
+
+if TYPE_CHECKING:
+    from coding_agent.permissions.protocol import PermissionHandler
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +35,7 @@ class ToolContext:
     workspace_root: str
     artifact_root: str
     cwd: str
+    permission_handler: PermissionHandler | None = None
 
 
 class ToolInput(BaseModel):

@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from coding_agent.permissions import PermissionHandler
 from coding_agent.providers import CompletionRequest, LLMProvider, ProviderError
 from coding_agent.tools import ArtifactStore, Tool, ToolContext, ToolExecutor, ToolResultProcessor
 from coding_agent.tools.base import ToolSpec
@@ -46,12 +47,14 @@ class Runtime:
         limits: RuntimeLimits | None = None,
         event_sink: EventSink | None = None,
         state_home: Path | None = None,
+        permission_handler: PermissionHandler | None = None,
     ) -> None:
         self._provider = provider
         self._tools = tuple(tools)
         self._limits = limits or RuntimeLimits()
         self._event_sink = event_sink
         self._state_home = state_home
+        self._permission_handler = permission_handler
 
     def run_turn(self, state: SessionState, user_input: str) -> RunResult:
         state.validate()
@@ -67,6 +70,7 @@ class Runtime:
             workspace_root=state.workspace_root,
             artifact_root=str(artifact_store.root),
             cwd=state.workspace_root,
+            permission_handler=self._permission_handler,
         )
         turn_usage = Usage()
         model_calls = 0
