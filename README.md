@@ -1,7 +1,7 @@
 # Coding Agent
 
-从零实现的 Python 编程智能体。目前已经完成同步 Runtime、核心协议和第一批只读工具，
-尚未接入真实模型 Provider 与写入/命令工具。
+从零实现的 Python 编程智能体。目前已经完成同步 Runtime、核心协议、两个模型 Provider、
+第一批只读工具和最小同步 REPL；写入与命令工具尚未实现。
 
 ## 结构
 
@@ -22,6 +22,27 @@ src/coding_agent/
 - 工具输入由 Pydantic v2 严格校验；模型可见工具输出统一限制为 50,000 字符。
 
 长期设计决策见 [`docs/design.md`](docs/design.md)。
+
+## 运行
+
+OpenAI-compatible API：
+
+```bash
+python3 -m pip install -e '.[openai]'
+export OPENAI_API_KEY='...'
+coding-agent --model <model> --workspace <path>
+```
+
+自定义兼容网关可增加 `--base-url`。使用 Anthropic Messages API 时：
+
+```bash
+python3 -m pip install -e '.[anthropic]'
+export ANTHROPIC_API_KEY='...'
+coding-agent --provider anthropic --model <model> --workspace <path>
+```
+
+REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看命令，输入 `/exit`
+或按 Ctrl-D 退出。第一版只接收单行输入，不提供 TUI、流式输出或会话恢复。
 
 ## 验证
 

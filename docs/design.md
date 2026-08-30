@@ -4,6 +4,9 @@
 原生 tool calling，但不使用 agent 框架、agent SDK 或服务端托管的代码/文件执行能力。
 第一版采用同步 Runtime，并以 Linux 为首要运行环境。
 
+交互客户端直接采用单行同步 REPL，并在同一个 `SessionState` 上执行多轮对话。第一版只有
+help/exit 命令，不实现 one-shot 模式、TUI、流式输出、多行编辑或会话恢复。
+
 ## 核心边界
 
 - `SessionState` 是会话状态的唯一事实来源。`Runtime.run_turn` 修改传入的状态，不在内部
