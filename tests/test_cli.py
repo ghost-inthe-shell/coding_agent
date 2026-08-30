@@ -1,7 +1,7 @@
-from io import StringIO
-from pathlib import Path
 import tempfile
 import unittest
+from io import StringIO
+from pathlib import Path
 
 from coding_agent.cli import InteractivePermissionHandler, run_repl
 from coding_agent.core.results import RunResult
@@ -140,6 +140,27 @@ class InteractivePermissionHandlerTests(unittest.TestCase):
 
         self.assertEqual(decision, PermissionDecision.ALLOW)
         self.assertIn("write in the workspace", output.getvalue())
+
+    def test_execute_request_escapes_control_characters_in_command(self) -> None:
+        output = StringIO()
+        handler = InteractivePermissionHandler(
+            input_stream=StringIO("y\n"),
+            output_stream=output,
+        )
+
+        decision = handler(
+            PermissionRequest(
+                PermissionOperation.EXECUTE,
+                "printf '\x1b[31mred'\nnext",
+            )
+        )
+
+        rendered = output.getvalue()
+        self.assertEqual(decision, PermissionDecision.ALLOW)
+        self.assertIn("shell command in the workspace", rendered)
+        self.assertIn(r"\u001b[31mred", rendered)
+        self.assertIn(r"\nnext", rendered)
+        self.assertNotIn("\x1b", rendered)
 
 
 if __name__ == "__main__":

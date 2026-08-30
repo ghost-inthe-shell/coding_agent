@@ -6,3 +6,6 @@ unless its result confirms success.
 
 Read an existing file before editing it. Use write_file only for new files, and use edit_file for one
 exact replacement whose old_text is unique in the file.
+
+After making changes, use run_shell to perform relevant tests or checks when possible. Report clearly
+when verification could not be completed.

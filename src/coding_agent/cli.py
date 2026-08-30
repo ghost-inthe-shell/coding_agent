@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -24,6 +25,7 @@ from coding_agent.tools import (
     GlobFilesTool,
     GrepSearchTool,
     ReadFileTool,
+    RunShellTool,
     WriteFileTool,
 )
 
@@ -51,15 +53,22 @@ class InteractivePermissionHandler:
         self._output_stream = output_stream
 
     def __call__(self, request: PermissionRequest) -> PermissionDecision:
-        action = (
-            "read outside the workspace"
-            if request.operation is PermissionOperation.READ
-            else "write in the workspace"
-        )
+        if request.operation is PermissionOperation.READ:
+            question = "Allow read outside the workspace?"
+            label = "Target"
+        elif request.operation is PermissionOperation.WRITE:
+            question = "Allow write in the workspace?"
+            label = "Target"
+        elif request.operation is PermissionOperation.EXECUTE:
+            question = "Run this shell command in the workspace?"
+            label = "Command"
+        else:
+            raise ValueError(f"unsupported permission operation: {request.operation!r}")
+        displayed_target = json.dumps(request.target, ensure_ascii=False)
         _write(
             self._output_stream,
-            f"Allow {action}?\n"
-            f"  {request.target}\n"
+            f"{question}\n"
+            f"  {label}: {displayed_target}\n"
             "Approve once? [y/N] ",
         )
         try:
@@ -169,6 +178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             GrepSearchTool(),
             WriteFileTool(),
             EditFileTool(),
+            RunShellTool(),
         ),
         permission_handler=InteractivePermissionHandler(),
     )

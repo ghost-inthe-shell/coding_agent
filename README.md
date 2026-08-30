@@ -1,7 +1,7 @@
 # Coding Agent
 
 从零实现的 Python 编程智能体。目前已经完成同步 Runtime、核心协议、两个模型 Provider、
-只读工具、最小文件写入/精确编辑工具和同步 REPL；命令执行工具尚未实现。
+只读工具、最小文件写入/精确编辑工具、受确认保护的 Shell 工具和同步 REPL。
 
 ## 结构
 
@@ -10,7 +10,7 @@ src/coding_agent/
 ├── core/           # 消息、会话状态、事件和同步 Runtime
 ├── providers/      # 模型 provider 边界
 ├── tools/          # 工具、执行器、结果处理和 artifact
-├── permissions/    # workspace/artifact 读取边界
+├── permissions/    # 文件与命令权限边界
 └── prompts/        # system prompt 源文件与加载器
 ```
 
@@ -43,7 +43,8 @@ coding-agent --provider anthropic --model <model> --workspace <path>
 
 REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看命令，输入 `/exit`
 或按 Ctrl-D 退出。workspace 外的只读工具调用会显示规范化路径并逐次请求确认。第一版只
-接收单行输入，不提供 TUI、流式输出或会话恢复。
+接收单行输入，不提供 TUI、流式输出或会话恢复。文件写入和每条 Shell 命令也会逐次请求
+确认；Shell 固定在 workspace 根目录启动，并使用 120 秒默认超时。
 
 ## 验证
 

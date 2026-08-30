@@ -40,7 +40,7 @@ requested、model responded、tool started、tool finished、turn finished。不
 预期内的 Provider 失败、非法工具入参、路径拒绝和普通工具 I/O 失败转换为明确结果。未预期
 的程序或协议错误会停止 Runtime，不得伪装成普通工具输出。
 
-## 只读工具与路径
+## 本地工具与权限
 
 第一批工具为 `read_file`、`glob_files` 和 `grep_search`。适合时优先调用 ripgrep；
 `grep_search` 在 ripgrep 不可用时使用系统 grep。glob 和 grep 不设置各自的匹配条数上限。
@@ -61,6 +61,12 @@ requested、model responded、tool started、tool finished、turn finished。不
 `edit_file` 每次只接受一组 `path`、`old_text`、`new_text`，不做模糊匹配、换行归一化或批量
 替换。目标必须已有可信版本，当前 `mtime_ns`、大小和 SHA-256 必须仍一致，且 `old_text` 必须
 非空并精确出现一次。确认后重复校验，再以同目录临时文件原子替换并更新可信版本。
+
+`run_shell` 只接受 `command` 和可选的 `timeout_seconds`，固定通过 `/bin/bash -c` 在 workspace
+根目录同步执行，不向模型暴露 cwd。每次有效调用都逐次确认且不做安全命令分类；这不是 Shell
+沙箱，命令仍可访问操作系统允许的 workspace 外资源。stdin 连接 `/dev/null`，默认超时 120
+秒、最大 600 秒；超时或达到原始输出硬上限时终止整个进程组。子进程继承普通环境，但删除
+`OPENAI_API_KEY` 和 `ANTHROPIC_API_KEY`。
 
 ## 工具输出
 

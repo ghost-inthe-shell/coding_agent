@@ -44,7 +44,7 @@ class ProcessTests(unittest.TestCase):
             "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
             f"child = subprocess.Popen([sys.executable, '-c', {child_source!r}]); "
             "print(child.pid, flush=True); time.sleep(30)",
-            timeout_seconds=0.05,
+            timeout_seconds=0.5,
         )
 
         child_pid = int(output.stdout.strip())
