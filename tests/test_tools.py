@@ -43,6 +43,7 @@ class ReadOnlyToolTests(unittest.TestCase):
             workspace_root=str(self.workspace),
             artifact_root=str(self.store.root),
             cwd=str(self.workspace),
+            read_file_versions={},
         )
         self.executor = ToolExecutor(
             (ReadFileTool(), GlobFilesTool(), GrepSearchTool()),
@@ -76,6 +77,8 @@ class ReadOnlyToolTests(unittest.TestCase):
         self.assertEqual(result.metadata["actual_end"], 2)
         self.assertTrue(result.metadata["truncated"])
         self.assertEqual(len(result.metadata["file_version"]["sha256"]), 64)
+        version = self.context.read_file_versions["notes.txt"]
+        self.assertEqual(version.to_dict(), result.metadata["file_version"])
 
     def test_read_file_rejects_binary_and_invalid_utf8(self) -> None:
         (self.workspace / "binary").write_bytes(b"a\x00b")
@@ -88,6 +91,17 @@ class ReadOnlyToolTests(unittest.TestCase):
         self.assertIn("binary", binary.content)
         self.assertEqual(invalid.status, ToolResultStatus.ERROR)
         self.assertIn("UTF-8", invalid.content)
+
+    def test_read_file_records_the_resolved_workspace_path(self) -> None:
+        source = self.workspace / "source"
+        source.mkdir()
+        (source / "target.txt").write_text("target\n", encoding="utf-8")
+        os.symlink(source / "target.txt", self.workspace / "alias.txt")
+
+        result = self.execute("read_file", {"path": "alias.txt"})
+
+        self.assertEqual(result.status, ToolResultStatus.SUCCESS)
+        self.assertEqual(set(self.context.read_file_versions), {"source/target.txt"})
 
     def test_workspace_escape_and_symlink_escape_are_denied(self) -> None:
         outside = self.root / "secret.txt"
@@ -132,6 +146,7 @@ class ReadOnlyToolTests(unittest.TestCase):
         self.assertEqual(handler.requests[0].target, str(note.resolve()))
         self.assertEqual(handler.requests[1].target, str(outside.resolve()))
         self.assertEqual(handler.requests[2].target, str(outside.resolve()))
+        self.assertEqual(context.read_file_versions, {})
 
     def test_outside_read_is_denied_when_user_declines(self) -> None:
         outside = self.root / "secret.txt"
@@ -160,6 +175,7 @@ class ReadOnlyToolTests(unittest.TestCase):
         result = self.execute("read_file", {"path": str(artifact.path)}, "read-artifact")
 
         self.assertEqual(result.content, "1: stored output")
+        self.assertEqual(self.context.read_file_versions, {})
 
     def test_glob_and_grep_have_no_small_item_cap(self) -> None:
         for index in range(230):

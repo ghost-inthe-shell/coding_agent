@@ -71,6 +71,7 @@ class Runtime:
             artifact_root=str(artifact_store.root),
             cwd=state.workspace_root,
             permission_handler=self._permission_handler,
+            read_file_versions=state.read_file_versions,
         )
         turn_usage = Usage()
         model_calls = 0

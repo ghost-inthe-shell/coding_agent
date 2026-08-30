@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import Field
 
+from coding_agent.core.file_state import FileVersion
 from coding_agent.core.results import ToolResult
 from coding_agent.permissions import PathAccessDenied, ReadPathPolicy
 
@@ -62,6 +63,19 @@ class ReadFileTool(Tool[ReadFileInput]):
             stat = path.stat()
         except OSError as exc:
             return ToolResult.error(f"could not stat {arguments.path}: {exc}")
+        version = FileVersion(
+            mtime_ns=stat.st_mtime_ns,
+            size=stat.st_size,
+            sha256=digest.hexdigest(),
+        )
+        workspace = Path(context.workspace_root).resolve()
+        try:
+            relative_path = path.relative_to(workspace).as_posix()
+        except ValueError:
+            relative_path = None
+        if relative_path is not None and context.read_file_versions is not None:
+            context.read_file_versions[relative_path] = version
+
         actual_start = selected[0][0] if selected else 0
         actual_end = selected[-1][0] if selected else 0
         content = "\n".join(f"{number}: {line}" for number, line in selected)
@@ -76,10 +90,6 @@ class ReadFileTool(Tool[ReadFileInput]):
                 "actual_start": actual_start,
                 "actual_end": actual_end,
                 "truncated": actual_end < total_lines,
-                "file_version": {
-                    "mtime_ns": stat.st_mtime_ns,
-                    "size": stat.st_size,
-                    "sha256": digest.hexdigest(),
-                },
+                "file_version": version.to_dict(),
             },
         )

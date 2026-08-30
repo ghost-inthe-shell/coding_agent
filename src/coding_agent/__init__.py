@@ -1,5 +1,6 @@
 """Public protocol surface for the coding agent."""
 
+from .core.file_state import FileVersion
 from .core.messages import (
     AssistantMessage,
     Message,
@@ -20,6 +21,7 @@ from .core.usage import Usage
 
 __all__ = [
     "AssistantMessage",
+    "FileVersion",
     "Message",
     "ProtocolError",
     "RunResult",

@@ -11,6 +11,8 @@ help/exit 命令，不实现 one-shot 模式、TUI、流式输出、多行编辑
 
 - `SessionState` 是会话状态的唯一事实来源。`Runtime.run_turn` 修改传入的状态，不在内部
   维护第二份消息历史。
+- workspace 内成功的 `read_file` 将规范相对路径及 `mtime_ns`、大小和全文件 SHA-256
+  登记到 `SessionState.read_file_versions`。不保存文件正文；artifact 与 workspace 外读取不登记。
 - `prompts/system.md` 是可编辑的 system prompt 源文件。创建会话时把解析后的文本保存到
   `SessionState.system_prompt`；恢复旧会话时继续使用原快照。
 - Provider 接收标准消息与工具 schema，直接返回标准化 `AssistantMessage`。厂商特有响应

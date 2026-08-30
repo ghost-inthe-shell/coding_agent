@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypeVar
 
@@ -12,6 +13,7 @@ from coding_agent.core.json_types import JsonObject
 from coding_agent.core.results import ToolResult
 
 if TYPE_CHECKING:
+    from coding_agent.core.file_state import FileVersion
     from coding_agent.permissions.protocol import PermissionHandler
 
 
@@ -36,6 +38,7 @@ class ToolContext:
     artifact_root: str
     cwd: str
     permission_handler: PermissionHandler | None = None
+    read_file_versions: MutableMapping[str, FileVersion] | None = None
 
 
 class ToolInput(BaseModel):

@@ -188,6 +188,31 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(tool_result.status, ToolResultStatus.SUCCESS)
         self.assertIn("approved content", tool_result.text)
+        self.assertEqual(state.read_file_versions, {})
+
+    def test_runtime_records_workspace_read_in_session_state(self) -> None:
+        path = self.workspace / "notes.txt"
+        path.write_text("tracked content\n", encoding="utf-8")
+        provider = SequenceProvider(
+            [
+                tool_message(
+                    ToolCall(
+                        id="call-1",
+                        name="read_file",
+                        arguments={"path": "notes.txt"},
+                    )
+                ),
+                text_message("done"),
+            ]
+        )
+        state = self.state()
+        runtime = Runtime(provider, (ReadFileTool(),), state_home=self.root / "state")
+
+        result = runtime.run_turn(state, "read notes")
+
+        self.assertEqual(result.status, RunStatus.COMPLETED)
+        self.assertEqual(set(state.read_file_versions), {"notes.txt"})
+        self.assertEqual(state.read_file_versions["notes.txt"].size, path.stat().st_size)
 
     def test_truncated_tool_calls_are_paired_but_never_executed(self) -> None:
         truncated = AssistantMessage(

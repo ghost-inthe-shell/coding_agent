@@ -1,5 +1,6 @@
 """Provider-independent data contracts used by the runtime."""
 
+from .file_state import FileVersion
 from .messages import (
     AssistantMessage,
     Message,
@@ -20,6 +21,7 @@ from .usage import Usage
 
 __all__ = [
     "AssistantMessage",
+    "FileVersion",
     "Message",
     "ProtocolError",
     "RunResult",
