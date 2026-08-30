@@ -58,6 +58,10 @@ requested、model responded、tool started、tool finished、turn finished。不
 `write_file` 只创建新的 UTF-8 文件，保留模型给出的确切内容，不覆盖已有路径，也不自动创建
 父目录。排他创建用于防止确认后出现的文件被覆盖；成功后把新文件登记为可信版本。
 
+`edit_file` 每次只接受一组 `path`、`old_text`、`new_text`，不做模糊匹配、换行归一化或批量
+替换。目标必须已有可信版本，当前 `mtime_ns`、大小和 SHA-256 必须仍一致，且 `old_text` 必须
+非空并精确出现一次。确认后重复校验，再以同目录临时文件原子替换并更新可信版本。
+
 ## 工具输出
 
 所有结果统一经过 `ToolResultProcessor`。模型最多看到 50,000 字符；更长的文本以头尾预览

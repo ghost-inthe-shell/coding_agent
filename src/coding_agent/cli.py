@@ -19,7 +19,13 @@ from coding_agent.permissions import (
     PermissionRequest,
 )
 from coding_agent.providers import AnthropicProvider, LLMProvider, OpenAICompatibleProvider
-from coding_agent.tools import GlobFilesTool, GrepSearchTool, ReadFileTool, WriteFileTool
+from coding_agent.tools import (
+    EditFileTool,
+    GlobFilesTool,
+    GrepSearchTool,
+    ReadFileTool,
+    WriteFileTool,
+)
 
 HELP_TEXT = """Commands:
   /help  Show this help.
@@ -157,7 +163,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     runtime = Runtime(
         provider,
-        (ReadFileTool(), GlobFilesTool(), GrepSearchTool(), WriteFileTool()),
+        (
+            ReadFileTool(),
+            GlobFilesTool(),
+            GrepSearchTool(),
+            WriteFileTool(),
+            EditFileTool(),
+        ),
         permission_handler=InteractivePermissionHandler(),
     )
     state = SessionState.create(uuid4().hex, workspace)
