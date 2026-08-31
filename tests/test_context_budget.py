@@ -12,6 +12,7 @@ class ContextBudgetTests(unittest.TestCase):
 
         self.assertEqual(large.safety_margin, 2_560)
         self.assertEqual(large.compact_threshold, 102_400)
+        self.assertEqual(large.output_reserve_threshold, 109_056)
         self.assertEqual(large.keep_recent_tokens, 20_000)
         self.assertEqual(small.safety_margin, 1_024)
         self.assertEqual(small.compact_threshold, 14_592)

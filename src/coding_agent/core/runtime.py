@@ -3,11 +3,28 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from coding_agent.context import (
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+    ContextBudget,
+    ContextCompactionError,
+    active_messages,
+    checkpoint_from_summary,
+    estimate_request_tokens,
+    estimate_text_tokens,
+    prepare_compaction,
+)
 from coding_agent.permissions import PermissionHandler
-from coding_agent.providers import CompletionRequest, LLMProvider, ProviderError
+from coding_agent.prompts import load_compaction_prompt
+from coding_agent.providers import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    CompletionRequest,
+    LLMProvider,
+    ProviderError,
+)
 from coding_agent.tools import ArtifactStore, Tool, ToolContext, ToolExecutor, ToolResultProcessor
 from coding_agent.tools.base import ToolSpec
 
@@ -15,11 +32,11 @@ from .events import (
     EventSink,
     ModelRequested,
     ModelResponded,
+    RuntimeEvent,
     ToolFinished,
     ToolStarted,
     TurnFinished,
     TurnStarted,
-    RuntimeEvent,
 )
 from .messages import AssistantMessage, UserMessage
 from .results import RunResult, ToolResult
@@ -38,6 +55,17 @@ class RuntimeLimits:
             raise ValueError("runtime limits must be positive")
 
 
+@dataclass(slots=True)
+class _TurnProgress:
+    usage: Usage = field(default_factory=Usage)
+    model_calls: int = 0
+    tool_calls: int = 0
+
+    def record_model(self, message: AssistantMessage) -> None:
+        self.model_calls += 1
+        self.usage = self.usage + message.usage
+
+
 class Runtime:
     def __init__(
         self,
@@ -48,6 +76,7 @@ class Runtime:
         event_sink: EventSink | None = None,
         state_home: Path | None = None,
         permission_handler: PermissionHandler | None = None,
+        context_window: int = DEFAULT_CONTEXT_WINDOW,
     ) -> None:
         self._provider = provider
         self._tools = tuple(tools)
@@ -55,6 +84,23 @@ class Runtime:
         self._event_sink = event_sink
         self._state_home = state_home
         self._permission_handler = permission_handler
+        provider_output_tokens = provider.max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
+        self._context_budget = ContextBudget(
+            context_window=context_window,
+            max_output_tokens=provider_output_tokens,
+        )
+        self._summary_budget = ContextBudget(
+            context_window=context_window,
+            max_output_tokens=min(
+                DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+                provider_output_tokens,
+            ),
+        )
+        self._compaction_prompt = load_compaction_prompt()
+        self._summary_input_token_limit = (
+            self._summary_budget.output_reserve_threshold
+            - estimate_text_tokens(self._compaction_prompt)
+        )
 
     def run_turn(self, state: SessionState, user_input: str) -> RunResult:
         state.validate()
@@ -73,15 +119,19 @@ class Runtime:
             permission_handler=self._permission_handler,
             read_file_versions=state.read_file_versions,
         )
-        turn_usage = Usage()
-        model_calls = 0
-        tool_calls = 0
+        progress = _TurnProgress()
 
         try:
-            while model_calls < self._limits.max_model_calls:
-                assistant = self._complete(state, executor.specs, model_calls + 1)
-                model_calls += 1
-                turn_usage = turn_usage + assistant.usage
+            while progress.model_calls < self._limits.max_model_calls:
+                self._auto_compact(state, executor.specs, progress)
+                if progress.model_calls >= self._limits.max_model_calls:
+                    break
+                assistant = self._complete(
+                    state,
+                    executor.specs,
+                    progress.model_calls + 1,
+                )
+                progress.record_model(assistant)
                 state.usage = state.usage + assistant.usage
                 state.messages.append(assistant)
                 state.touch()
@@ -93,9 +143,9 @@ class Runtime:
                         RunResult(
                             status=RunStatus.PROVIDER_ERROR,
                             final_text=assistant.text,
-                            usage=turn_usage,
-                            model_turns=model_calls,
-                            tool_calls=tool_calls,
+                            usage=progress.usage,
+                            model_turns=progress.model_calls,
+                            tool_calls=progress.tool_calls,
                             stop_reason=assistant.stop_reason,
                             error_message=assistant.error_message,
                         ),
@@ -106,9 +156,9 @@ class Runtime:
                         RunResult(
                             status=RunStatus.INTERRUPTED,
                             final_text=assistant.text,
-                            usage=turn_usage,
-                            model_turns=model_calls,
-                            tool_calls=tool_calls,
+                            usage=progress.usage,
+                            model_turns=progress.model_calls,
+                            tool_calls=progress.tool_calls,
                             stop_reason=assistant.stop_reason,
                             error_message=assistant.error_message,
                         ),
@@ -129,16 +179,16 @@ class Runtime:
                         state.touch()
                         self._emit(ToolFinished(state.session_id, message))
 
-                    if assistant.tool_calls and model_calls < self._limits.max_model_calls:
+                    if assistant.tool_calls and progress.model_calls < self._limits.max_model_calls:
                         continue
                     return self._finish(
                         state,
                         RunResult(
                             status=RunStatus.LIMIT_REACHED,
                             final_text=assistant.text,
-                            usage=turn_usage,
-                            model_turns=model_calls,
-                            tool_calls=tool_calls,
+                            usage=progress.usage,
+                            model_turns=progress.model_calls,
+                            tool_calls=progress.tool_calls,
                             stop_reason=assistant.stop_reason,
                             error_message="model output-token limit reached",
                         ),
@@ -149,9 +199,9 @@ class Runtime:
                         RunResult(
                             status=RunStatus.COMPLETED,
                             final_text=assistant.text,
-                            usage=turn_usage,
-                            model_turns=model_calls,
-                            tool_calls=tool_calls,
+                            usage=progress.usage,
+                            model_turns=progress.model_calls,
+                            tool_calls=progress.tool_calls,
                             stop_reason=assistant.stop_reason,
                         ),
                     )
@@ -159,9 +209,9 @@ class Runtime:
                 budget_exhausted = False
                 for call in assistant.tool_calls:
                     self._emit(ToolStarted(state.session_id, call))
-                    if tool_calls < self._limits.max_tool_calls:
+                    if progress.tool_calls < self._limits.max_tool_calls:
                         result = executor.execute(call, context)
-                        tool_calls += 1
+                        progress.tool_calls += 1
                     else:
                         budget_exhausted = True
                         result = ToolResult.error(
@@ -174,10 +224,13 @@ class Runtime:
                     self._emit(ToolFinished(state.session_id, message))
 
                 if budget_exhausted:
-                    if model_calls < self._limits.max_model_calls:
-                        final = self._complete(state, (), model_calls + 1)
-                        model_calls += 1
-                        turn_usage = turn_usage + final.usage
+                    final_text = assistant.text
+                    stop_reason = assistant.stop_reason
+                    if progress.model_calls < self._limits.max_model_calls:
+                        self._auto_compact(state, (), progress)
+                    if progress.model_calls < self._limits.max_model_calls:
+                        final = self._complete(state, (), progress.model_calls + 1)
+                        progress.record_model(final)
                         state.usage = state.usage + final.usage
                         if final.tool_calls:
                             raise RuntimeError(
@@ -187,17 +240,14 @@ class Runtime:
                         state.touch()
                         final_text = final.text
                         stop_reason = final.stop_reason
-                    else:
-                        final_text = assistant.text
-                        stop_reason = assistant.stop_reason
                     return self._finish(
                         state,
                         RunResult(
                             status=RunStatus.LIMIT_REACHED,
                             final_text=final_text,
-                            usage=turn_usage,
-                            model_turns=model_calls,
-                            tool_calls=tool_calls,
+                            usage=progress.usage,
+                            model_turns=progress.model_calls,
+                            tool_calls=progress.tool_calls,
                             stop_reason=stop_reason,
                             error_message="turn tool-call limit reached",
                         ),
@@ -208,21 +258,21 @@ class Runtime:
                 RunResult(
                     status=RunStatus.LIMIT_REACHED,
                     final_text="",
-                    usage=turn_usage,
-                    model_turns=model_calls,
-                    tool_calls=tool_calls,
+                    usage=progress.usage,
+                    model_turns=progress.model_calls,
+                    tool_calls=progress.tool_calls,
                     error_message="turn model-call limit reached",
                 ),
             )
-        except ProviderError as exc:
+        except (ContextCompactionError, ProviderError) as exc:
             return self._finish(
                 state,
                 RunResult(
                     status=RunStatus.PROVIDER_ERROR,
                     final_text="",
-                    usage=turn_usage,
-                    model_turns=model_calls,
-                    tool_calls=tool_calls,
+                    usage=progress.usage,
+                    model_turns=progress.model_calls,
+                    tool_calls=progress.tool_calls,
                     error_message=str(exc),
                 ),
             )
@@ -232,9 +282,9 @@ class Runtime:
                 RunResult(
                     status=RunStatus.INTERRUPTED,
                     final_text="",
-                    usage=turn_usage,
-                    model_turns=model_calls,
-                    tool_calls=tool_calls,
+                    usage=progress.usage,
+                    model_turns=progress.model_calls,
+                    tool_calls=progress.tool_calls,
                     error_message="interrupted by user",
                 ),
             )
@@ -253,12 +303,69 @@ class Runtime:
         message = self._provider.complete(
             CompletionRequest(
                 system_prompt=state.system_prompt,
-                messages=tuple(state.messages),
+                messages=active_messages(state),
                 tools=tools,
             )
         )
         self._emit(ModelResponded(state.session_id, model_call, message))
         return message
+
+    def _auto_compact(
+        self,
+        state: SessionState,
+        tools: tuple[ToolSpec, ...],
+        progress: _TurnProgress,
+    ) -> None:
+        while progress.model_calls < self._limits.max_model_calls:
+            plan = prepare_compaction(
+                state,
+                self._context_budget,
+                tools,
+                summary_input_token_limit=self._summary_input_token_limit,
+            )
+            if plan is None:
+                self._ensure_context_fits(state, tools)
+                return
+
+            summary_tokens = estimate_request_tokens(
+                self._compaction_prompt,
+                plan.messages,
+                (),
+            )
+            if summary_tokens >= self._summary_budget.output_reserve_threshold:
+                raise ContextCompactionError("history segment is too large to summarize safely")
+
+            model_call = progress.model_calls + 1
+            self._emit(ModelRequested(state.session_id, model_call))
+            response = self._provider.complete(
+                CompletionRequest(
+                    system_prompt=self._compaction_prompt,
+                    messages=plan.messages,
+                    tools=(),
+                    max_output_tokens=DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+                )
+            )
+            self._emit(ModelResponded(state.session_id, model_call, response))
+            progress.record_model(response)
+            state.usage = state.usage + response.usage
+            state.compaction = checkpoint_from_summary(plan, response)
+            state.touch()
+            state.validate()
+
+    def _ensure_context_fits(
+        self,
+        state: SessionState,
+        tools: tuple[ToolSpec, ...],
+    ) -> None:
+        estimated = estimate_request_tokens(
+            state.system_prompt,
+            active_messages(state),
+            tools,
+        )
+        if estimated >= self._context_budget.output_reserve_threshold:
+            raise ContextCompactionError(
+                "active context is too large and has no safe message group to compact"
+            )
 
     def _finish(self, state: SessionState, result: RunResult) -> RunResult:
         if result.max_output_tokens is None:

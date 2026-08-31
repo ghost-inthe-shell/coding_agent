@@ -6,11 +6,18 @@ import unittest
 from pydantic import Field
 
 from coding_agent.core.events import TurnFinished
-from coding_agent.core.messages import AssistantMessage, TextBlock, ToolCall, ToolResultMessage
+from coding_agent.core.messages import (
+    AssistantMessage,
+    TextBlock,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+)
 from coding_agent.core.results import ToolResult
 from coding_agent.core.runtime import Runtime, RuntimeLimits
 from coding_agent.core.session import SessionState
 from coding_agent.core.types import RunStatus, StopReason, ToolResultStatus
+from coding_agent.core.usage import Usage
 from coding_agent.permissions import PermissionDecision, PermissionRequest
 from coding_agent.providers import CompletionRequest, LLMProvider, ProviderError
 from coding_agent.tools import ReadFileTool, Tool, ToolContext, ToolInput
@@ -59,11 +66,12 @@ def tool_message(*calls: ToolCall) -> AssistantMessage:
     )
 
 
-def text_message(text: str) -> AssistantMessage:
+def text_message(text: str, *, usage: Usage | None = None) -> AssistantMessage:
     return AssistantMessage(
         content=(TextBlock(text),),
         provider="fake",
         model="fake",
+        usage=usage or Usage(),
         stop_reason=StopReason.STOP,
     )
 
@@ -153,9 +161,7 @@ class RuntimeTests(unittest.TestCase):
             def complete(self, request: CompletionRequest) -> AssistantMessage:
                 raise ProviderError("offline")
 
-        result = Runtime(FailingProvider(), (), state_home=self.root).run_turn(
-            self.state(), "work"
-        )
+        result = Runtime(FailingProvider(), (), state_home=self.root).run_turn(self.state(), "work")
 
         self.assertEqual(result.status, RunStatus.PROVIDER_ERROR)
         self.assertEqual(result.error_message, "offline")
@@ -289,6 +295,105 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result.model_turns, 1)
         self.assertEqual(result.tool_calls, 1)
         self.assertEqual(result.max_output_tokens, 2048)
+
+    def test_auto_compaction_uses_summary_then_sends_only_active_history(self) -> None:
+        old_marker = "old-marker-" + "x" * 17_000
+        state = self.state()
+        state.messages.extend(
+            (
+                UserMessage.from_text(old_marker, timestamp=1),
+                text_message("recent-" + "y" * 3_000),
+            )
+        )
+        provider = SequenceProvider(
+            (
+                text_message(
+                    "rolling summary",
+                    usage=Usage(input_tokens=50, output_tokens=5),
+                ),
+                text_message("done", usage=Usage(input_tokens=60, output_tokens=4)),
+            )
+        )
+        runtime = Runtime(provider, (), state_home=self.root, context_window=8_000)
+
+        result = runtime.run_turn(state, "continue")
+
+        self.assertEqual(result.status, RunStatus.COMPLETED)
+        self.assertEqual(result.model_turns, 2)
+        self.assertEqual(result.usage.input_tokens, 110)
+        self.assertEqual(result.usage.output_tokens, 9)
+        self.assertIsNotNone(state.compaction)
+        assert state.compaction is not None
+        self.assertEqual(state.compaction.first_kept_message_index, 1)
+        self.assertIn(old_marker, state.messages[0].content[0].text)
+        self.assertEqual(provider.requests[0].tools, ())
+        self.assertEqual(provider.requests[0].max_output_tokens, 2_048)
+        self.assertIn("rolling checkpoint", provider.requests[0].system_prompt)
+        active_text = "\n".join(
+            block.text
+            for message in provider.requests[1].messages
+            if isinstance(message, (UserMessage, AssistantMessage))
+            for block in message.content
+            if isinstance(block, TextBlock)
+        )
+        self.assertIn("rolling summary", active_text)
+        self.assertNotIn(old_marker, active_text)
+        state.validate()
+
+    def test_invalid_compaction_response_fails_without_replacing_checkpoint(self) -> None:
+        state = self.state()
+        state.messages.extend(
+            (
+                UserMessage.from_text("x" * 17_000, timestamp=1),
+                text_message("y" * 3_000),
+            )
+        )
+        tool_response = tool_message(ToolCall(id="call-1", name="echo"))
+        invalid_summary = AssistantMessage(
+            content=tool_response.content,
+            provider=tool_response.provider,
+            model=tool_response.model,
+            usage=Usage(input_tokens=50, output_tokens=2),
+            stop_reason=tool_response.stop_reason,
+        )
+        runtime = Runtime(
+            SequenceProvider((invalid_summary,)),
+            (),
+            state_home=self.root,
+            context_window=8_000,
+        )
+
+        result = runtime.run_turn(state, "continue")
+
+        self.assertEqual(result.status, RunStatus.PROVIDER_ERROR)
+        self.assertEqual(result.model_turns, 1)
+        self.assertEqual(result.usage.input_tokens, 50)
+        self.assertIn("unexpectedly contained tool calls", result.error_message)
+        self.assertIsNone(state.compaction)
+        state.validate()
+
+    def test_compaction_consumes_the_same_model_call_budget(self) -> None:
+        state = self.state()
+        state.messages.extend(
+            (
+                UserMessage.from_text("x" * 17_000, timestamp=1),
+                text_message("y" * 3_000),
+            )
+        )
+        runtime = Runtime(
+            SequenceProvider((text_message("summary"),)),
+            (),
+            limits=RuntimeLimits(max_model_calls=1),
+            state_home=self.root,
+            context_window=8_000,
+        )
+
+        result = runtime.run_turn(state, "continue")
+
+        self.assertEqual(result.status, RunStatus.LIMIT_REACHED)
+        self.assertEqual(result.model_turns, 1)
+        self.assertEqual(result.error_message, "turn model-call limit reached")
+        self.assertIsNotNone(state.compaction)
 
 
 if __name__ == "__main__":

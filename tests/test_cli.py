@@ -177,6 +177,7 @@ class ReplTests(unittest.TestCase):
         arguments = build_parser().parse_args(["--model", "model"])
 
         self.assertEqual(arguments.max_tokens, 16_384)
+        self.assertEqual(arguments.context_window, 128_000)
 
     def test_workspace_and_resume_are_mutually_exclusive(self) -> None:
         parser = build_parser()
@@ -192,6 +193,24 @@ class ReplTests(unittest.TestCase):
                     "session-1",
                 ]
             )
+
+    def test_main_rejects_context_window_without_output_reserve(self) -> None:
+        with (
+            patch.object(cli, "_create_provider") as create_provider,
+            self.assertRaises(SystemExit),
+        ):
+            cli.main(
+                [
+                    "--model",
+                    "model",
+                    "--context-window",
+                    "16000",
+                    "--max-tokens",
+                    "15000",
+                ]
+            )
+
+        create_provider.assert_not_called()
 
     def test_main_loads_explicit_session_before_starting_repl(self) -> None:
         store = Mock()
@@ -255,6 +274,7 @@ class ReplTests(unittest.TestCase):
         with (
             patch.object(cli, "SessionStore", return_value=store),
             patch.object(cli, "_create_provider", return_value=object()),
+            patch.object(cli, "Runtime"),
             patch.object(cli, "run_repl") as repl,
             patch.object(cli.sys, "stderr", error_output),
         ):

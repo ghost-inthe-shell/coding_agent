@@ -35,8 +35,11 @@ class ContextBudget:
     @property
     def compact_threshold(self) -> int:
         ratio_threshold = int(self.context_window * 0.8)
-        output_reserve_threshold = self.context_window - self.max_output_tokens - self.safety_margin
-        return min(ratio_threshold, output_reserve_threshold)
+        return min(ratio_threshold, self.output_reserve_threshold)
+
+    @property
+    def output_reserve_threshold(self) -> int:
+        return self.context_window - self.max_output_tokens - self.safety_margin
 
     @property
     def keep_recent_tokens(self) -> int:

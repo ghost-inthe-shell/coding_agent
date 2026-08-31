@@ -52,6 +52,7 @@ def prepare_compaction(
     tools: Sequence[ToolSpec],
     *,
     force: bool = False,
+    summary_input_token_limit: int | None = None,
 ) -> CompactionPlan | None:
     """Choose a safe forward-only cut and build its rolling summarization input."""
 
@@ -70,12 +71,27 @@ def prepare_compaction(
     if cut is None:
         return None
 
-    newly_evicted = tuple(state.messages[start:cut])
-    if state.compaction is None:
-        summary_input = newly_evicted
-    else:
-        summary_input = _prepend_summary(state.compaction.summary, newly_evicted)
-    summary_input = _append_summary_request(summary_input)
+    if summary_input_token_limit is not None and summary_input_token_limit <= 0:
+        raise ValueError("summary_input_token_limit must be positive")
+
+    candidate_cuts = [
+        group_start
+        for group_start, _ in _message_groups(state.messages, start)[1:]
+        if group_start <= cut
+    ]
+    summary_input: tuple[Message, ...] | None = None
+    for candidate in reversed(candidate_cuts):
+        candidate_input = _summary_input(state, start, candidate)
+        if (
+            summary_input_token_limit is None
+            or estimate_request_tokens("", candidate_input, ()) < summary_input_token_limit
+        ):
+            cut = candidate
+            summary_input = candidate_input
+            break
+    if summary_input is None:
+        return None
+
     return CompactionPlan(
         messages=summary_input,
         first_kept_message_index=cut,
@@ -184,3 +200,16 @@ def _append_summary_request(messages: tuple[Message, ...]) -> tuple[Message, ...
         )
         return (*messages[:-1], merged)
     return (*messages, UserMessage(content=(request_block,), timestamp=0))
+
+
+def _summary_input(
+    state: SessionState,
+    start: int,
+    cut: int,
+) -> tuple[Message, ...]:
+    newly_evicted = tuple(state.messages[start:cut])
+    if state.compaction is None:
+        messages = newly_evicted
+    else:
+        messages = _prepend_summary(state.compaction.summary, newly_evicted)
+    return _append_summary_request(messages)

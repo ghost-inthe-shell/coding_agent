@@ -15,6 +15,7 @@ try:
 except ImportError:  # pragma: no cover - readline is expected on Linux
     _readline = None
 
+from coding_agent.context import DEFAULT_CONTEXT_WINDOW, ContextBudget
 from coding_agent.core.results import RunResult
 from coding_agent.core.runtime import Runtime
 from coding_agent.core.session import SessionState
@@ -190,6 +191,12 @@ def build_parser() -> argparse.ArgumentParser:
             f"(default: {DEFAULT_MAX_OUTPUT_TOKENS})"
         ),
     )
+    parser.add_argument(
+        "--context-window",
+        type=_positive_int,
+        default=DEFAULT_CONTEXT_WINDOW,
+        help=f"model context window in tokens (default: {DEFAULT_CONTEXT_WINDOW})",
+    )
     return parser
 
 
@@ -198,6 +205,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.provider == "anthropic" and arguments.base_url is not None:
         parser.error("--base-url is only valid with the openai-compatible provider")
+    try:
+        ContextBudget(
+            context_window=arguments.context_window,
+            max_output_tokens=arguments.max_tokens,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     session_store = SessionStore()
     if arguments.resume is not None:
@@ -237,6 +251,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             RunShellTool(),
         ),
         permission_handler=InteractivePermissionHandler(),
+        context_window=arguments.context_window,
     )
     if arguments.resume is None:
         try:
