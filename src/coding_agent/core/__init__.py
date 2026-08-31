@@ -1,5 +1,6 @@
 """Provider-independent data contracts used by the runtime."""
 
+from .compaction import CompactionCheckpoint
 from .file_state import FileVersion
 from .messages import (
     AssistantMessage,
@@ -29,6 +30,7 @@ from .usage import Usage
 
 __all__ = [
     "AssistantMessage",
+    "CompactionCheckpoint",
     "FileVersion",
     "InvalidSessionError",
     "Message",

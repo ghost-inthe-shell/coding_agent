@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from coding_agent.core.compaction import CompactionCheckpoint
 from coding_agent.core.file_state import FileVersion
 from coding_agent.core.messages import (
     AssistantMessage,
@@ -43,6 +44,12 @@ class SessionStateTests(unittest.TestCase):
                     timestamp=12,
                 ),
             ],
+            compaction=CompactionCheckpoint(
+                summary="The user asked to read the file.",
+                first_kept_message_index=1,
+                tokens_before=123,
+                created_at=13,
+            ),
             read_file_versions={
                 "src/example.py": FileVersion(
                     mtime_ns=123,
@@ -71,21 +78,94 @@ class SessionStateTests(unittest.TestCase):
         legacy = state.to_dict()
         legacy["schema_version"] = 1
         del legacy["read_file_versions"]
+        del legacy["compaction"]
 
         restored = SessionState.from_dict(legacy)
 
-        self.assertEqual(restored.schema_version, 3)
+        self.assertEqual(restored.schema_version, 4)
         self.assertEqual(restored.read_file_versions, {})
 
-        version_two = state.to_dict()
-        version_two["schema_version"] = 2
-        restored_two = SessionState.from_dict(version_two)
-        self.assertEqual(restored_two.schema_version, 3)
+        for schema_version in (2, 3):
+            with self.subTest(schema_version=schema_version):
+                legacy_version = state.to_dict()
+                legacy_version["schema_version"] = schema_version
+                legacy_version.pop("compaction", None)
+                restored_version = SessionState.from_dict(legacy_version)
+                self.assertEqual(restored_version.schema_version, 4)
+                self.assertIsNone(restored_version.compaction)
 
         current_without_versions = state.to_dict()
         del current_without_versions["read_file_versions"]
         with self.assertRaisesRegex(ValueError, "required"):
             SessionState.from_dict(current_without_versions)
+
+        current_without_compaction = state.to_dict()
+        del current_without_compaction["compaction"]
+        with self.assertRaisesRegex(ValueError, "compaction is required"):
+            SessionState.from_dict(current_without_compaction)
+
+    def test_compaction_checkpoint_requires_a_valid_active_message_boundary(self) -> None:
+        call = ToolCall(id="call-1", name="read_file")
+        messages = [
+            UserMessage.from_text("read", timestamp=1),
+            AssistantMessage(
+                content=(call,),
+                provider="fake",
+                model="fake",
+                stop_reason=StopReason.TOOL_USE,
+                timestamp=2,
+            ),
+            ToolResultMessage(
+                tool_call_id="call-1",
+                tool_name="read_file",
+                content=(TextBlock("contents"),),
+                timestamp=3,
+            ),
+            AssistantMessage(
+                content=(TextBlock("done"),),
+                provider="fake",
+                model="fake",
+                timestamp=4,
+            ),
+        ]
+
+        valid = SessionState(
+            session_id="session-1",
+            workspace_root="/tmp/workspace",
+            system_prompt="Be useful.",
+            messages=messages,
+            compaction=CompactionCheckpoint("summary", 1, 100, created_at=5),
+        )
+        valid.validate()
+
+        cuts_tool_results = SessionState(
+            session_id="session-1",
+            workspace_root="/tmp/workspace",
+            system_prompt="Be useful.",
+            messages=messages,
+            compaction=CompactionCheckpoint("summary", 2, 100, created_at=5),
+        )
+        with self.assertRaisesRegex(ValueError, "no pending tool call"):
+            cuts_tool_results.validate()
+
+        beyond_history = SessionState(
+            session_id="session-1",
+            workspace_root="/tmp/workspace",
+            system_prompt="Be useful.",
+            messages=messages,
+            compaction=CompactionCheckpoint("summary", 5, 100, created_at=5),
+        )
+        with self.assertRaisesRegex(ValueError, "exceeds message count"):
+            beyond_history.validate()
+
+    def test_compaction_checkpoint_fields_are_strict(self) -> None:
+        for arguments in (
+            {"summary": "", "first_kept_message_index": 1, "tokens_before": 1},
+            {"summary": "ok", "first_kept_message_index": 0, "tokens_before": 1},
+            {"summary": "ok", "first_kept_message_index": 1, "tokens_before": -1},
+        ):
+            with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                CompactionCheckpoint(**arguments)
 
     def test_file_versions_require_canonical_relative_paths_and_valid_digests(self) -> None:
         version = FileVersion(mtime_ns=-1, size=2, sha256="A" * 64)
@@ -93,9 +173,7 @@ class SessionStateTests(unittest.TestCase):
         self.assertEqual(version.mtime_ns, -1)
         self.assertEqual(version.sha256, "a" * 64)
         for path in ("", ".", "/absolute.py", "src/../example.py", "src//example.py"):
-            with self.subTest(path=path), self.assertRaisesRegex(
-                ValueError, "workspace-relative"
-            ):
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, "workspace-relative"):
                 SessionState(
                     session_id="session-1",
                     workspace_root="/tmp/workspace",

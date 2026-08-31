@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
+from .compaction import CompactionCheckpoint
 from .file_state import FileVersion
 from .json_types import JsonObject
 from .messages import (
@@ -18,7 +19,7 @@ from .messages import (
 from .types import SessionStatus
 from .usage import Usage
 
-CURRENT_SESSION_SCHEMA_VERSION = 3
+CURRENT_SESSION_SCHEMA_VERSION = 4
 
 
 @dataclass(slots=True)
@@ -27,6 +28,7 @@ class SessionState:
     workspace_root: str
     system_prompt: str
     messages: list[Message] = field(default_factory=list)
+    compaction: CompactionCheckpoint | None = None
     read_file_versions: dict[str, FileVersion] = field(default_factory=dict)
     usage: Usage = field(default_factory=Usage)
     status: SessionStatus = SessionStatus.CREATED
@@ -43,6 +45,8 @@ class SessionState:
             raise ValueError("system_prompt must not be empty")
         if self.schema_version != CURRENT_SESSION_SCHEMA_VERSION:
             raise ValueError(f"unsupported session schema version: {self.schema_version}")
+        if self.compaction is not None and not isinstance(self.compaction, CompactionCheckpoint):
+            raise ValueError("compaction must be a CompactionCheckpoint or null")
         versions = dict(self.read_file_versions)
         for path, version in versions.items():
             _validate_version_path(path)
@@ -62,6 +66,14 @@ class SessionState:
 
     def validate(self, *, allow_pending_tool_calls: bool = False) -> None:
         validate_message_sequence(self.messages, allow_pending_tail=allow_pending_tool_calls)
+        if self.compaction is not None:
+            first_kept = self.compaction.first_kept_message_index
+            if first_kept > len(self.messages):
+                raise ValueError("compaction first_kept_message_index exceeds message count")
+            validate_message_sequence(
+                self.messages[first_kept:],
+                allow_pending_tail=allow_pending_tool_calls,
+            )
 
     def touch(self) -> None:
         self.updated_at = timestamp_ms()
@@ -73,6 +85,7 @@ class SessionState:
             "workspace_root": self.workspace_root,
             "system_prompt": self.system_prompt,
             "messages": [message_to_dict(message) for message in self.messages],
+            "compaction": self.compaction.to_dict() if self.compaction is not None else None,
             "read_file_versions": {
                 path: version.to_dict() for path, version in self.read_file_versions.items()
             },
@@ -87,13 +100,16 @@ class SessionState:
         messages = data.get("messages", [])
         usage = data.get("usage", {})
         schema_version = _required_integer(data, "schema_version")
-        if schema_version not in {1, 2, CURRENT_SESSION_SCHEMA_VERSION}:
+        if schema_version not in {1, 2, 3, CURRENT_SESSION_SCHEMA_VERSION}:
             raise ValueError(f"unsupported session schema version: {schema_version}")
         if schema_version >= 2 and "read_file_versions" not in data:
             raise ValueError(
                 f"read_file_versions is required in session schema version {schema_version}"
             )
+        if schema_version >= 4 and "compaction" not in data:
+            raise ValueError(f"compaction is required in session schema version {schema_version}")
         versions = data.get("read_file_versions", {})
+        raw_compaction = data.get("compaction")
         if not isinstance(messages, list):
             raise ValueError("messages must be a list")
         if not isinstance(usage, Mapping):
@@ -115,12 +131,20 @@ class SessionState:
                 raise ValueError("each file version must be an object")
             parsed_versions[path] = FileVersion.from_dict(version)
 
+        if raw_compaction is None:
+            compaction = None
+        elif isinstance(raw_compaction, Mapping):
+            compaction = CompactionCheckpoint.from_dict(raw_compaction)
+        else:
+            raise ValueError("compaction must be an object or null")
+
         state = cls(
             schema_version=CURRENT_SESSION_SCHEMA_VERSION,
             session_id=_required_string(data, "session_id"),
             workspace_root=_required_string(data, "workspace_root"),
             system_prompt=_required_string(data, "system_prompt"),
             messages=parsed_messages,
+            compaction=compaction,
             read_file_versions=parsed_versions,
             usage=Usage.from_dict(usage),
             status=SessionStatus(_required_string(data, "status")),
