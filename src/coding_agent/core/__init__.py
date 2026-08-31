@@ -15,7 +15,7 @@ from .messages import (
     message_to_dict,
     validate_message_sequence,
 )
-from .results import RunResult, ToolResult
+from .results import CompactionResult, RunResult, ToolResult
 from .runtime import Runtime, RuntimeLimits
 from .session import SessionState
 from .session_store import (
@@ -31,6 +31,7 @@ from .usage import Usage
 __all__ = [
     "AssistantMessage",
     "CompactionCheckpoint",
+    "CompactionResult",
     "FileVersion",
     "InvalidSessionError",
     "Message",

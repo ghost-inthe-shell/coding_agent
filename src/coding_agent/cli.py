@@ -16,11 +16,12 @@ except ImportError:  # pragma: no cover - readline is expected on Linux
     _readline = None
 
 from coding_agent.context import DEFAULT_CONTEXT_WINDOW, ContextBudget
-from coding_agent.core.results import RunResult
+from coding_agent.core.results import CompactionResult, RunResult
 from coding_agent.core.runtime import Runtime
 from coding_agent.core.session import SessionState
 from coding_agent.core.session_store import SessionStore, SessionStoreError
 from coding_agent.core.types import RunStatus
+from coding_agent.core.usage import Usage
 from coding_agent.permissions import (
     PermissionDecision,
     PermissionOperation,
@@ -42,13 +43,17 @@ from coding_agent.tools import (
 )
 
 HELP_TEXT = """Commands:
-  /help  Show this help.
-  /exit  End the session.
+  /compact  Summarize older conversation history now.
+  /help     Show this help.
+  /exit     End the session.
 """
 
 
-class _TurnRunner(Protocol):
+class _ReplRuntime(Protocol):
     def run_turn(self, state: SessionState, user_input: str) -> RunResult:
+        ...
+
+    def compact(self, state: SessionState) -> CompactionResult:
         ...
 
 
@@ -107,7 +112,7 @@ class InteractivePermissionHandler:
 
 
 def run_repl(
-    runtime: _TurnRunner,
+    runtime: _ReplRuntime,
     state: SessionState,
     *,
     session_store: _SessionSaver | None = None,
@@ -142,21 +147,27 @@ def run_repl(
         if user_input == "/help":
             _write(output_stream, HELP_TEXT)
             continue
+        if user_input == "/compact":
+            compaction = runtime.compact(state)
+            _print_compaction_result(compaction, output_stream)
+            if (
+                session_store is not None
+                and (compaction.compacted or compaction.usage != Usage())
+                and not _save_checkpoint(session_store, state, output_stream)
+            ):
+                return 1
+            continue
         if user_input.startswith("/"):
             _write(output_stream, f"Unknown command: {user_input}\n")
             continue
 
         result = runtime.run_turn(state, user_input)
         _print_result(result, output_stream)
-        if session_store is not None:
-            try:
-                session_store.save(state)
-            except SessionStoreError as exc:
-                _write(
-                    output_stream,
-                    f"[session_error] checkpoint failed; REPL terminated: {exc}\n",
-                )
-                return 1
+        if (
+            session_store is not None
+            and not _save_checkpoint(session_store, state, output_stream)
+        ):
+            return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -304,6 +315,37 @@ def _print_result(result: RunResult, output_stream: TextIO) -> None:
             output_stream,
             f"[{result.status.value}] {detail} ({', '.join(diagnostics)})\n",
         )
+
+
+def _print_compaction_result(result: CompactionResult, output_stream: TextIO) -> None:
+    if result.compacted:
+        _write(
+            output_stream,
+            "[compacted] "
+            f"summarized_messages={result.summarized_messages}, "
+            f"tokens_before={result.tokens_before}, "
+            f"tokens_after={result.tokens_after}\n",
+        )
+    elif result.error_message is not None:
+        _write(output_stream, f"[compact_error] {result.error_message}\n")
+    else:
+        _write(output_stream, "[compact] nothing to compact\n")
+
+
+def _save_checkpoint(
+    session_store: _SessionSaver,
+    state: SessionState,
+    output_stream: TextIO,
+) -> bool:
+    try:
+        session_store.save(state)
+    except SessionStoreError as exc:
+        _write(
+            output_stream,
+            f"[session_error] checkpoint failed; REPL terminated: {exc}\n",
+        )
+        return False
+    return True
 
 
 def _write(stream: TextIO, text: str) -> None:

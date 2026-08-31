@@ -131,12 +131,17 @@ coding-agent --help
 python -m pip install -e '.[openai,anthropic]'
 ```
 
-REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看命令，输入 `/exit`
-或按 Ctrl-D 退出。workspace 外的只读工具调用会显示规范化路径并逐次请求确认。第一版只
-接收单行输入；Linux 交互式终端使用 GNU readline 提供光标移动、退格和当前进程内
-历史。不提供 TUI、流式输出、latest 会话选择或 REPL 内会话切换。文件写入和每条 Shell
-命令也会逐次请求确认；Shell 固定在 workspace 根目录启动，并使用 120 秒默认超时。模型
-每次调用默认最多生成 16,384 tokens，可通过 `--max-tokens` 调整。
+REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看命令，输入 `/compact`
+可立即将较早历史更新为 rolling summary，输入 `/exit` 或按 Ctrl-D 退出。原始消息仍完整保存
+在 session checkpoint 中；压缩只改变后续发送给模型的活动上下文。workspace 外的只读工具
+调用会显示规范化路径并逐次请求确认。第一版只接收单行输入；Linux 交互式终端使用 GNU
+readline 提供光标移动、退格和当前进程内历史。不提供 TUI、流式输出、latest 会话选择或
+REPL 内会话切换。文件写入和每条 Shell 命令也会逐次请求确认；Shell 固定在 workspace
+根目录启动，并使用 120 秒默认超时。
+
+模型每次调用默认最多生成 16,384 tokens，可通过 `--max-tokens` 调整；context window 默认
+按 128,000 tokens 估算，可用 `--context-window` 设置为实际模型值。历史接近安全阈值时会
+自动压缩，摘要调用复用当前 Provider/模型且不开放工具。
 
 ## 验证
 

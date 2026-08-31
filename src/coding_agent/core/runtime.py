@@ -9,6 +9,7 @@ from pathlib import Path
 from coding_agent.context import (
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+    CompactionPlan,
     ContextBudget,
     ContextCompactionError,
     active_messages,
@@ -39,7 +40,7 @@ from .events import (
     TurnStarted,
 )
 from .messages import AssistantMessage, UserMessage
-from .results import RunResult, ToolResult
+from .results import CompactionResult, RunResult, ToolResult
 from .session import SessionState
 from .types import RunStatus, SessionStatus, StopReason
 from .usage import Usage
@@ -100,6 +101,56 @@ class Runtime:
         self._summary_input_token_limit = (
             self._summary_budget.output_reserve_threshold
             - estimate_text_tokens(self._compaction_prompt)
+        )
+
+    def compact(self, state: SessionState) -> CompactionResult:
+        """Force one rolling compaction at a stable session boundary."""
+
+        if state.status is SessionStatus.RUNNING:
+            raise ValueError("cannot compact a session while a turn is running")
+        state.validate()
+        tools = tuple(tool.spec for tool in self._tools)
+        try:
+            plan = self._make_compaction_plan(state, tools, force=True)
+        except ContextCompactionError as exc:
+            return CompactionResult(compacted=False, error_message=str(exc))
+        if plan is None:
+            return CompactionResult(compacted=False)
+
+        try:
+            response = self._request_compaction(state, plan)
+        except ProviderError as exc:
+            return CompactionResult(compacted=False, error_message=str(exc))
+        except KeyboardInterrupt:
+            return CompactionResult(
+                compacted=False,
+                error_message="compaction interrupted by user",
+            )
+
+        state.usage = state.usage + response.usage
+        state.touch()
+        try:
+            checkpoint = checkpoint_from_summary(plan, response)
+        except ContextCompactionError as exc:
+            return CompactionResult(
+                compacted=False,
+                usage=response.usage,
+                error_message=str(exc),
+            )
+
+        state.compaction = checkpoint
+        state.validate()
+        tokens_after = estimate_request_tokens(
+            state.system_prompt,
+            active_messages(state),
+            tools,
+        )
+        return CompactionResult(
+            compacted=True,
+            usage=response.usage,
+            summarized_messages=plan.summarized_message_count,
+            tokens_before=plan.tokens_before,
+            tokens_after=tokens_after,
         )
 
     def run_turn(self, state: SessionState, user_input: str) -> RunResult:
@@ -317,40 +368,64 @@ class Runtime:
         progress: _TurnProgress,
     ) -> None:
         while progress.model_calls < self._limits.max_model_calls:
-            plan = prepare_compaction(
-                state,
-                self._context_budget,
-                tools,
-                summary_input_token_limit=self._summary_input_token_limit,
-            )
+            plan = self._make_compaction_plan(state, tools)
             if plan is None:
                 self._ensure_context_fits(state, tools)
                 return
 
-            summary_tokens = estimate_request_tokens(
-                self._compaction_prompt,
-                plan.messages,
-                (),
-            )
-            if summary_tokens >= self._summary_budget.output_reserve_threshold:
-                raise ContextCompactionError("history segment is too large to summarize safely")
-
             model_call = progress.model_calls + 1
-            self._emit(ModelRequested(state.session_id, model_call))
-            response = self._provider.complete(
-                CompletionRequest(
-                    system_prompt=self._compaction_prompt,
-                    messages=plan.messages,
-                    tools=(),
-                    max_output_tokens=DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
-                )
-            )
-            self._emit(ModelResponded(state.session_id, model_call, response))
+            response = self._request_compaction(state, plan, model_call=model_call)
             progress.record_model(response)
             state.usage = state.usage + response.usage
             state.compaction = checkpoint_from_summary(plan, response)
             state.touch()
             state.validate()
+
+    def _make_compaction_plan(
+        self,
+        state: SessionState,
+        tools: tuple[ToolSpec, ...],
+        *,
+        force: bool = False,
+    ) -> CompactionPlan | None:
+        plan = prepare_compaction(
+            state,
+            self._context_budget,
+            tools,
+            force=force,
+            summary_input_token_limit=self._summary_input_token_limit,
+        )
+        if plan is None:
+            return None
+        summary_tokens = estimate_request_tokens(
+            self._compaction_prompt,
+            plan.messages,
+            (),
+        )
+        if summary_tokens >= self._summary_budget.output_reserve_threshold:
+            raise ContextCompactionError("history segment is too large to summarize safely")
+        return plan
+
+    def _request_compaction(
+        self,
+        state: SessionState,
+        plan: CompactionPlan,
+        *,
+        model_call: int | None = None,
+    ) -> AssistantMessage:
+        if model_call is not None:
+            self._emit(ModelRequested(state.session_id, model_call))
+        response = self._provider.complete(
+            CompletionRequest(
+                system_prompt=self._compaction_prompt,
+                messages=plan.messages,
+                tools=(),
+                max_output_tokens=DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+            )
+        )
+        if model_call is not None:
+            self._emit(ModelResponded(state.session_id, model_call, response))
+        return response
 
     def _ensure_context_fits(
         self,

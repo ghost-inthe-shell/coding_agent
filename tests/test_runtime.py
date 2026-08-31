@@ -1,10 +1,11 @@
-from collections import deque
-from pathlib import Path
 import tempfile
 import unittest
+from collections import deque
+from pathlib import Path
 
 from pydantic import Field
 
+from coding_agent.core.compaction import CompactionCheckpoint
 from coding_agent.core.events import TurnFinished
 from coding_agent.core.messages import (
     AssistantMessage,
@@ -16,7 +17,12 @@ from coding_agent.core.messages import (
 from coding_agent.core.results import ToolResult
 from coding_agent.core.runtime import Runtime, RuntimeLimits
 from coding_agent.core.session import SessionState
-from coding_agent.core.types import RunStatus, StopReason, ToolResultStatus
+from coding_agent.core.types import (
+    RunStatus,
+    SessionStatus,
+    StopReason,
+    ToolResultStatus,
+)
 from coding_agent.core.usage import Usage
 from coding_agent.permissions import PermissionDecision, PermissionRequest
 from coding_agent.providers import CompletionRequest, LLMProvider, ProviderError
@@ -394,6 +400,99 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result.model_turns, 1)
         self.assertEqual(result.error_message, "turn model-call limit reached")
         self.assertIsNotNone(state.compaction)
+
+    def test_manual_compaction_forces_one_rolling_checkpoint_below_threshold(self) -> None:
+        state = self.state()
+        state.messages.extend(
+            (
+                UserMessage.from_text("old question", timestamp=1),
+                text_message("old answer"),
+                UserMessage.from_text("recent question", timestamp=2),
+                text_message("recent answer"),
+            )
+        )
+        provider = SequenceProvider(
+            (
+                text_message(
+                    "manual rolling summary",
+                    usage=Usage(input_tokens=30, output_tokens=4),
+                ),
+            )
+        )
+        runtime = Runtime(provider, (), state_home=self.root)
+
+        result = runtime.compact(state)
+
+        self.assertTrue(result.compacted)
+        self.assertEqual(result.summarized_messages, 1)
+        self.assertIsNotNone(result.tokens_before)
+        self.assertIsNotNone(result.tokens_after)
+        self.assertEqual(result.usage, Usage(input_tokens=30, output_tokens=4))
+        self.assertEqual(len(state.messages), 4)
+        self.assertEqual(state.messages[0].content[0].text, "old question")
+        self.assertIsNotNone(state.compaction)
+        assert state.compaction is not None
+        self.assertEqual(state.compaction.summary, "manual rolling summary")
+        self.assertEqual(state.compaction.first_kept_message_index, 1)
+        self.assertEqual(state.usage, result.usage)
+        self.assertEqual(provider.requests[0].tools, ())
+        self.assertEqual(provider.requests[0].max_output_tokens, 2_048)
+        state.validate()
+
+    def test_manual_compaction_without_two_message_groups_is_a_noop(self) -> None:
+        provider = SequenceProvider(())
+        state = self.state()
+        state.messages.append(UserMessage.from_text("only message"))
+
+        result = Runtime(provider, (), state_home=self.root).compact(state)
+
+        self.assertFalse(result.compacted)
+        self.assertIsNone(result.error_message)
+        self.assertEqual(provider.requests, [])
+        self.assertIsNone(state.compaction)
+
+    def test_invalid_manual_summary_keeps_prior_checkpoint_and_records_usage(self) -> None:
+        state = self.state()
+        state.messages.extend(
+            (
+                UserMessage.from_text("already summarized", timestamp=1),
+                text_message("old answer"),
+                UserMessage.from_text("recent question", timestamp=2),
+                text_message("recent answer"),
+            )
+        )
+        previous = CompactionCheckpoint(
+            summary="previous summary",
+            first_kept_message_index=1,
+            tokens_before=500,
+            created_at=10,
+        )
+        state.compaction = previous
+        invalid = tool_message(ToolCall(id="call-1", name="echo"))
+        invalid = AssistantMessage(
+            content=invalid.content,
+            provider=invalid.provider,
+            model=invalid.model,
+            usage=Usage(input_tokens=25, output_tokens=3),
+            stop_reason=invalid.stop_reason,
+        )
+        runtime = Runtime(SequenceProvider((invalid,)), (), state_home=self.root)
+
+        result = runtime.compact(state)
+
+        self.assertFalse(result.compacted)
+        self.assertIn("unexpectedly contained tool calls", result.error_message)
+        self.assertIs(state.compaction, previous)
+        self.assertEqual(state.usage, Usage(input_tokens=25, output_tokens=3))
+        self.assertEqual(result.usage, state.usage)
+        state.validate()
+
+    def test_manual_compaction_rejects_running_session(self) -> None:
+        state = self.state()
+        state.status = SessionStatus.RUNNING
+
+        with self.assertRaisesRegex(ValueError, "while a turn is running"):
+            Runtime(SequenceProvider(()), (), state_home=self.root).compact(state)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 from coding_agent import cli
 from coding_agent.cli import InteractivePermissionHandler, build_parser, run_repl
-from coding_agent.core.results import RunResult
+from coding_agent.core.results import CompactionResult, RunResult
 from coding_agent.core.session import SessionState
 from coding_agent.core.session_store import SessionNotFoundError, SessionSaveError
 from coding_agent.core.types import RunStatus
@@ -15,13 +15,23 @@ from coding_agent.permissions import PermissionDecision, PermissionOperation, Pe
 
 
 class RecordingRuntime:
-    def __init__(self, results: list[RunResult]) -> None:
+    def __init__(
+        self,
+        results: list[RunResult],
+        compaction_results: list[CompactionResult] | None = None,
+    ) -> None:
         self.results = iter(results)
+        self.compaction_results = iter(compaction_results or ())
         self.calls: list[tuple[SessionState, str]] = []
+        self.compaction_calls: list[SessionState] = []
 
     def run_turn(self, state: SessionState, user_input: str) -> RunResult:
         self.calls.append((state, user_input))
         return next(self.results)
+
+    def compact(self, state: SessionState) -> CompactionResult:
+        self.compaction_calls.append(state)
+        return next(self.compaction_results)
 
 
 class RecordingSessionStore:
@@ -138,8 +148,85 @@ class ReplTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(runtime.calls, [])
+        self.assertEqual(runtime.compaction_calls, [])
+        self.assertIn("/compact", output.getvalue())
         self.assertIn("/exit", output.getvalue())
         self.assertIn("Unknown command: /unknown", output.getvalue())
+
+    def test_compact_runs_at_repl_boundary_and_saves_changed_state(self) -> None:
+        runtime = RecordingRuntime(
+            [],
+            [
+                CompactionResult(
+                    compacted=True,
+                    usage=Usage(input_tokens=40, output_tokens=8),
+                    summarized_messages=3,
+                    tokens_before=1_200,
+                    tokens_after=450,
+                )
+            ],
+        )
+        store = RecordingSessionStore()
+        output = StringIO()
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            session_store=store,
+            input_stream=StringIO("/compact\n/exit\n"),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(runtime.calls, [])
+        self.assertEqual(runtime.compaction_calls, [self.state])
+        self.assertEqual(store.saved, [self.state])
+        self.assertIn("[compacted] summarized_messages=3", output.getvalue())
+        self.assertIn("tokens_before=1200", output.getvalue())
+        self.assertIn("tokens_after=450", output.getvalue())
+
+    def test_compact_noop_does_not_write_an_identical_checkpoint(self) -> None:
+        runtime = RecordingRuntime([], [CompactionResult(compacted=False)])
+        store = RecordingSessionStore()
+        output = StringIO()
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            session_store=store,
+            input_stream=StringIO("/compact\n/exit\n"),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(store.saved, [])
+        self.assertIn("[compact] nothing to compact", output.getvalue())
+
+    def test_invalid_compaction_is_reported_and_usage_is_checkpointed(self) -> None:
+        runtime = RecordingRuntime(
+            [],
+            [
+                CompactionResult(
+                    compacted=False,
+                    usage=Usage(input_tokens=20, output_tokens=2),
+                    error_message="summary was truncated",
+                )
+            ],
+        )
+        store = RecordingSessionStore()
+        output = StringIO()
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            session_store=store,
+            input_stream=StringIO("/compact\n/exit\n"),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(store.saved, [self.state])
+        self.assertIn("[compact_error] summary was truncated", output.getvalue())
 
     def test_non_completed_result_reports_status_and_error(self) -> None:
         runtime = RecordingRuntime(

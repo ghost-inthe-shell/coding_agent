@@ -4,9 +4,9 @@
 原生 tool calling，但不使用 agent 框架、agent SDK 或服务端托管的代码/文件执行能力。
 第一版采用同步 Runtime，并以 Linux 为首要运行环境。
 
-交互客户端直接采用单行同步 REPL，并在同一个 `SessionState` 上执行多轮对话。第一版只有
-help/exit 命令，Linux 交互 TTY 使用 Python 标准库 GNU readline 做单行编辑；不实现
-one-shot 模式、TUI、流式输出、多行编辑或 REPL 内会话切换。
+交互客户端直接采用单行同步 REPL，并在同一个 `SessionState` 上执行多轮对话。第一版提供
+help、compact 和 exit 命令，Linux 交互 TTY 使用 Python 标准库 GNU readline 做单行编辑；
+不实现 one-shot 模式、TUI、流式输出、多行编辑或 REPL 内会话切换。
 
 ## 核心边界
 
@@ -45,6 +45,19 @@ tool result 始终按原顺序完整配对。单轮默认最多调用模型 8 �
 
 两个 Provider 的单次默认输出上限统一为 16,384 tokens。`RunResult.max_output_tokens`
 记录单次请求上限，而 `RunResult.usage.output_tokens` 是整个 turn 多次模型调用的累计值。
+
+模型 context window 是启动配置，默认 128,000 tokens，不进入 `SessionState`。Runtime 使用
+本地保守估算，并在以下两个阈值中较早到达者触发自动压缩：context window 的 80%，或
+`context_window - max_output_tokens - safety_margin`；安全余量为 `max(1024, context window 的
+2%)`。第二项为下一次响应保留完整输出空间，避免输入虽未达到 80%，却已挤占模型输出预算。
+
+压缩不删除 `SessionState.messages` 中的原始历史，只保存一个向前移动的 compaction
+checkpoint；Provider 看到的是 checkpoint 摘要加未压缩后缀。每次摘要只总结“已有 rolling
+summary + 本次新移出的历史”，system prompt 不进入摘要。摘要调用复用当前 Provider 和模型、
+关闭 tools、最多输出 2,048 tokens，并与普通回复共同消耗模型调用次数与 usage。截断、失败或
+包含 tool call 的摘要不得替换旧 checkpoint。第一版不做 tool result 的 microcompact/snip；
+REPL 的裸命令 `/compact` 可在稳定会话边界强制执行一次同样的 rolling 压缩，不接收自定义
+压缩指令。
 
 若模型因输出 token 限制停止，纯文本作为部分结果以 `limit_reached` 结束；若响应包含 tool
 calls，Runtime 不执行整批调用，而是逐个生成配对错误结果，并在模型调用预算允许时继续循环。

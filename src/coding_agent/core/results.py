@@ -68,3 +68,23 @@ class RunResult:
             raise ValueError("run counters must be non-negative")
         if self.max_output_tokens is not None and self.max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be positive when provided")
+
+
+@dataclass(frozen=True, slots=True)
+class CompactionResult:
+    compacted: bool
+    usage: Usage = field(default_factory=Usage)
+    summarized_messages: int = 0
+    tokens_before: int | None = None
+    tokens_after: int | None = None
+    error_message: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.summarized_messages < 0:
+            raise ValueError("summarized_messages must be non-negative")
+        for name, value in (
+            ("tokens_before", self.tokens_before),
+            ("tokens_after", self.tokens_after),
+        ):
+            if value is not None and value < 0:
+                raise ValueError(f"{name} must be non-negative when provided")
