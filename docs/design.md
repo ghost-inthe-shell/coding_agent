@@ -54,10 +54,10 @@ tool result 始终按原顺序完整配对。单轮默认最多调用模型 8 �
 压缩不删除 `SessionState.messages` 中的原始历史，只保存一个向前移动的 compaction
 checkpoint；Provider 看到的是 checkpoint 摘要加未压缩后缀。每次摘要只总结“已有 rolling
 summary + 本次新移出的历史”，system prompt 不进入摘要。摘要调用复用当前 Provider 和模型、
-关闭 tools、最多输出 2,048 tokens，并与普通回复共同消耗模型调用次数与 usage。截断、失败或
-包含 tool call 的摘要不得替换旧 checkpoint。第一版不做 tool result 的 microcompact/snip；
-REPL 的裸命令 `/compact` 可在稳定会话边界强制执行一次同样的 rolling 压缩，不接收自定义
-压缩指令。
+关闭 tools、最多输出 2,048 tokens。自动摘要占用当前 turn 的模型调用预算；手动摘要位于
+turn 外，不受单 turn 调用次数限制；二者都累计 session usage。截断、失败或包含 tool call
+的摘要不得替换旧 checkpoint。第一版不做 tool result 的 microcompact/snip；REPL 的裸命令
+`/compact` 可在稳定会话边界强制执行一次同样的 rolling 压缩，不接收自定义压缩指令。
 
 若模型因输出 token 限制停止，纯文本作为部分结果以 `limit_reached` 结束；若响应包含 tool
 calls，Runtime 不执行整批调用，而是逐个生成配对错误结果，并在模型调用预算允许时继续循环。
