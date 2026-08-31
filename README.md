@@ -66,7 +66,9 @@ coding-agent \
   --model deepseek-v4-flash \
   --base-url "$OPENAI_BASE_URL" \
   --api-dialect deepseek \
-  --reasoning low
+  --reasoning low \
+  --max-tokens 32768 \
+  --max-turns 32
 ```
 
 `OPENAI_API_KEY` 由 Provider 从环境变量读取；兼容网关的地址通过
@@ -129,6 +131,8 @@ coding-agent \
   --base-url "$OPENAI_BASE_URL" \
   --api-dialect deepseek \
   --reasoning low \
+  --max-tokens 32768 \
+  --max-turns 32 \
   --resume <session-id>
 ```
 
@@ -145,7 +149,9 @@ coding-agent \
   --model deepseek-v4-flash \
   --base-url "$OPENAI_BASE_URL" \
   --api-dialect deepseek \
-  --reasoning low
+  --reasoning low \
+  --max-tokens 32768 \
+  --max-turns 32
 ```
 
 ### `coding-agent: command not found`
@@ -179,6 +185,11 @@ REPL 内会话切换。文件写入和每条 Shell 命令也会逐次请求确�
 模型每次调用默认最多生成 16,384 tokens，可通过 `--max-tokens` 调整；context window 默认
 按 128,000 tokens 估算，可用 `--context-window` 设置为实际模型值。历史接近安全阈值时会
 自动压缩，摘要调用复用当前 Provider/模型且不开放工具。
+
+每次用户输入默认最多进行 32 次 Agent 模型调用，可通过 `--max-turns` 调整，例如复杂任务
+可使用 `--max-turns 64`。最后一次调用不提供工具，只用于如实说明已完成内容和未完成内容；
+自动 compact 的内部摘要请求累计 token usage，但不占用该回合预算。`--max-turns`、
+`--max-tokens` 等 Provider/Runtime 启动配置不保存在 session 中，恢复会话时需要重新传入。
 
 ## 验证
 

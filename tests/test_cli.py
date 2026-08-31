@@ -294,6 +294,7 @@ class ReplTests(unittest.TestCase):
         arguments = build_parser().parse_args(["--model", "model"])
 
         self.assertEqual(arguments.max_tokens, 16_384)
+        self.assertEqual(arguments.max_turns, 32)
         self.assertEqual(arguments.context_window, 128_000)
         self.assertEqual(arguments.api_dialect, "generic")
         self.assertEqual(arguments.reasoning, "default")
@@ -405,17 +406,25 @@ class ReplTests(unittest.TestCase):
         with (
             patch.object(cli, "SessionStore", return_value=store),
             patch.object(cli, "_create_provider", return_value=object()),
-            patch.object(cli, "Runtime", return_value=runtime),
+            patch.object(cli, "Runtime", return_value=runtime) as runtime_class,
             patch.object(cli, "run_repl", return_value=0) as repl,
         ):
             exit_code = cli.main(
-                ["--model", "model", "--workspace", str(self.workspace)]
+                [
+                    "--model",
+                    "model",
+                    "--workspace",
+                    str(self.workspace),
+                    "--max-turns",
+                    "64",
+                ]
             )
 
         self.assertEqual(exit_code, 0)
         state = store.save.call_args.args[0]
         self.assertEqual(state.workspace_root, str(self.workspace))
         self.assertEqual(len(state.session_id), 32)
+        self.assertEqual(runtime_class.call_args.kwargs["limits"].max_model_calls, 64)
         repl.assert_called_once_with(runtime, state, session_store=store)
 
     def test_main_fails_before_provider_creation_when_resume_cannot_load(self) -> None:

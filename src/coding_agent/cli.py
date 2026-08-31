@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - readline is expected on Linux
 
 from coding_agent.context import DEFAULT_CONTEXT_WINDOW, ContextBudget
 from coding_agent.core.results import CompactionResult, RunResult
-from coding_agent.core.runtime import Runtime
+from coding_agent.core.runtime import DEFAULT_MAX_MODEL_CALLS, Runtime, RuntimeLimits
 from coding_agent.core.session import SessionState
 from coding_agent.core.session_store import SessionStore, SessionStoreError
 from coding_agent.core.types import RunStatus
@@ -212,6 +212,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="main-request reasoning level (default: provider default)",
     )
     parser.add_argument(
+        "--max-turns",
+        type=_positive_int,
+        default=DEFAULT_MAX_MODEL_CALLS,
+        help=(
+            "maximum agent model calls per user turn "
+            f"(default: {DEFAULT_MAX_MODEL_CALLS})"
+        ),
+    )
+    parser.add_argument(
         "--max-tokens",
         type=_positive_int,
         default=DEFAULT_MAX_OUTPUT_TOKENS,
@@ -287,6 +296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         permission_handler=InteractivePermissionHandler(),
         context_window=arguments.context_window,
+        limits=RuntimeLimits(max_model_calls=arguments.max_turns),
     )
     if arguments.resume is None:
         try:
