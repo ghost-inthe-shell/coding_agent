@@ -165,6 +165,23 @@ class AnthropicProviderTests(unittest.TestCase):
         self.assertEqual(result.stop_reason, StopReason.LENGTH)
         self.assertEqual(result.tool_calls[0].id, "call-1")
 
+    def test_request_can_use_a_smaller_output_limit(self) -> None:
+        messages = FakeMessages(
+            response(content=(namespace(type="text", text="summary"),))
+        )
+        client = FakeClient(messages)
+        provider = AnthropicProvider("test-model", client=client)
+
+        provider.complete(
+            CompletionRequest(
+                system_prompt="Summarize.",
+                messages=(),
+                max_output_tokens=2_048,
+            )
+        )
+
+        self.assertEqual(messages.arguments["max_tokens"], 2_048)
+
     def test_maps_refusal_to_error_message(self) -> None:
         provider = AnthropicProvider(
             "model",

@@ -207,6 +207,21 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
 
         self.assertEqual(result.stop_reason, StopReason.LENGTH)
 
+    def test_request_can_use_a_smaller_output_limit(self) -> None:
+        completions = FakeCompletions(response(content="summary"))
+        client = FakeClient(completions)
+        provider = OpenAICompatibleProvider("test-model", client=client)
+
+        provider.complete(
+            CompletionRequest(
+                system_prompt="Summarize.",
+                messages=(),
+                max_output_tokens=2_048,
+            )
+        )
+
+        self.assertEqual(completions.arguments["max_tokens"], 2_048)
+
     def test_preserves_truncated_tool_calls_for_runtime_rejection(self) -> None:
         raw_call = namespace(
             id="call-1",

@@ -57,7 +57,10 @@ class AnthropicProvider(LLMProvider):
     def complete(self, request: CompletionRequest) -> AssistantMessage:
         arguments: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            "max_tokens": min(
+                request.max_output_tokens or self.max_tokens,
+                self.max_tokens,
+            ),
             "messages": _convert_messages(request.messages),
         }
         if request.system_prompt:

@@ -61,7 +61,10 @@ class OpenAICompatibleProvider(LLMProvider):
         arguments: dict[str, Any] = {
             "model": self.model,
             "messages": _convert_messages(request),
-            "max_tokens": self.max_tokens,
+            "max_tokens": min(
+                request.max_output_tokens or self.max_tokens,
+                self.max_tokens,
+            ),
             "stream": False,
         }
         if request.tools:
