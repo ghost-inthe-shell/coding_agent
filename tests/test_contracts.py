@@ -15,7 +15,7 @@ from coding_agent.core.events import (
 from coding_agent.core.messages import AssistantMessage, TextBlock, ToolCall, UserMessage
 from coding_agent.core.results import ToolResult
 from coding_agent.core.types import StopReason, ToolResultStatus
-from coding_agent.providers import CompletionRequest, LLMProvider
+from coding_agent.providers import CompletionRequest, LLMProvider, ReasoningLevel
 from coding_agent.tools import (
     ArtifactStore,
     Tool,
@@ -69,6 +69,22 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(response.text, "received 1 message(s)")
         self.assertEqual(response.provider, "fake")
         self.assertEqual(spec.input_schema["additionalProperties"], False)
+        self.assertEqual(request.reasoning, ReasoningLevel.DEFAULT)
+
+    def test_completion_request_reasoning_level_is_strict(self) -> None:
+        request = CompletionRequest(
+            system_prompt="Summarize.",
+            messages=(),
+            reasoning=ReasoningLevel.MINIMAL,
+        )
+
+        self.assertEqual(request.reasoning, ReasoningLevel.MINIMAL)
+        with self.assertRaisesRegex(TypeError, "ReasoningLevel"):
+            CompletionRequest(  # type: ignore[arg-type]
+                system_prompt="System.",
+                messages=(),
+                reasoning="low",
+            )
 
     def test_executor_strictly_validates_arguments(self) -> None:
         store = ArtifactStore("session-1", state_home=Path(self.temporary.name))
