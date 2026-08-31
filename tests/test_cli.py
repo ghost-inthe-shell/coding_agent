@@ -12,6 +12,7 @@ from coding_agent.core.session_store import SessionNotFoundError, SessionSaveErr
 from coding_agent.core.types import RunStatus
 from coding_agent.core.usage import Usage
 from coding_agent.permissions import PermissionDecision, PermissionOperation, PermissionRequest
+from coding_agent.providers import ApiDialect, ReasoningLevel
 
 
 class RecordingRuntime:
@@ -294,6 +295,57 @@ class ReplTests(unittest.TestCase):
 
         self.assertEqual(arguments.max_tokens, 16_384)
         self.assertEqual(arguments.context_window, 128_000)
+        self.assertEqual(arguments.api_dialect, "generic")
+        self.assertEqual(arguments.reasoning, "default")
+
+    def test_parser_does_not_expose_internal_minimal_reasoning(self) -> None:
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(
+                ["--model", "model", "--reasoning", "minimal"]
+            )
+
+    def test_main_rejects_openai_reasoning_options_for_anthropic(self) -> None:
+        invalid_options = (
+            ("--api-dialect", "deepseek"),
+            ("--reasoning", "low"),
+        )
+        for option, value in invalid_options:
+            with self.subTest(option=option), self.assertRaises(SystemExit):
+                cli.main(
+                    [
+                        "--provider",
+                        "anthropic",
+                        "--model",
+                        "model",
+                        option,
+                        value,
+                    ]
+                )
+
+    def test_create_provider_passes_explicit_dialect_and_reasoning(self) -> None:
+        provider = object()
+        with patch.object(
+            cli,
+            "OpenAICompatibleProvider",
+            return_value=provider,
+        ) as provider_class:
+            result = cli._create_provider(
+                "openai-compatible",
+                "model",
+                base_url="https://api.example.test",
+                max_tokens=8_192,
+                api_dialect=ApiDialect.DEEPSEEK,
+                reasoning=ReasoningLevel.LOW,
+            )
+
+        self.assertIs(result, provider)
+        provider_class.assert_called_once_with(
+            "model",
+            base_url="https://api.example.test",
+            max_tokens=8_192,
+            dialect=ApiDialect.DEEPSEEK,
+            reasoning=ReasoningLevel.LOW,
+        )
 
     def test_workspace_and_resume_are_mutually_exclusive(self) -> None:
         parser = build_parser()

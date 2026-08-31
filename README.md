@@ -64,11 +64,44 @@ coding-agent \
   --provider openai-compatible \
   --workspace /home/lmz/test_agent \
   --model deepseek-v4-flash \
-  --base-url "$OPENAI_BASE_URL"
+  --base-url "$OPENAI_BASE_URL" \
+  --api-dialect deepseek \
+  --reasoning low
 ```
 
 `OPENAI_API_KEY` 由 Provider 从环境变量读取；兼容网关的地址通过
 `--base-url` 显式传入。如果使用 OpenAI 官方地址，可省略 `--base-url`。
+
+OpenAI-compatible 只统一基础消息格式，不统一 thinking 扩展。`--api-dialect` 应按照实际
+API 端点选择，而不只是看模型名称：DeepSeek 官方端点使用 `deepseek`，阿里云百炼使用
+`dashscope`，Moonshot 官方端点使用 `moonshot`，其他端点保持 `generic`。`generic` 不会发送
+任何厂商 thinking 参数。
+
+主请求可通过 `--reasoning default|off|low|medium|high|max` 设置推理意图。`default` 不发送
+控制字段；其他值必须被所选 dialect 明确支持，否则启动失败。例如：
+
+```bash
+# Qwen 经 DashScope 调用；具体模型仍可能只支持其中部分档位
+coding-agent \
+  --provider openai-compatible \
+  --workspace /home/lmz/test_agent \
+  --model <qwen-model> \
+  --base-url <dashscope-compatible-base-url> \
+  --api-dialect dashscope \
+  --reasoning low
+
+# Kimi 经 Moonshot 官方端点调用；当前支持 default/off
+coding-agent \
+  --provider openai-compatible \
+  --workspace /home/lmz/test_agent \
+  --model <kimi-model> \
+  --base-url <moonshot-compatible-base-url> \
+  --api-dialect moonshot \
+  --reasoning off
+```
+
+同一模型若通过另一家兼容网关调用，应选择网关实际实现的 dialect。摘要请求自动使用最小
+推理策略：DeepSeek/Moonshot 关闭 thinking，DashScope 使用 low，generic 不发送扩展字段。
 
 使用 Anthropic Messages API 时：
 
@@ -94,6 +127,8 @@ coding-agent \
   --provider openai-compatible \
   --model deepseek-v4-flash \
   --base-url "$OPENAI_BASE_URL" \
+  --api-dialect deepseek \
+  --reasoning low \
   --resume <session-id>
 ```
 
@@ -108,7 +143,9 @@ coding-agent \
   --provider openai-compatible \
   --workspace /home/lmz/test_agent \
   --model deepseek-v4-flash \
-  --base-url "$OPENAI_BASE_URL"
+  --base-url "$OPENAI_BASE_URL" \
+  --api-dialect deepseek \
+  --reasoning low
 ```
 
 ### `coding-agent: command not found`

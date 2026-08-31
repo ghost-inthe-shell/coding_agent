@@ -26,6 +26,10 @@ help、compact 和 exit 命令，Linux 交互 TTY 使用 Python 标准库 GNU re
   `SessionState.system_prompt`；恢复旧会话时继续使用原快照。
 - Provider 接收标准消息与工具 schema，直接返回标准化 `AssistantMessage`。厂商特有响应
   对象不得进入 SessionState。
+- OpenAI-compatible 传输与厂商 thinking 扩展分离。启动时显式选择 `generic`、`deepseek`、
+  `dashscope` 或 `moonshot` API dialect；不根据模型名或 URL 猜测。Runtime 只表达
+  `default/off/low/medium/high/max/minimal` 推理意图，由 Provider 映射为厂商字段。不支持的
+  用户配置明确拒绝，不静默换档；这些启动配置不进入 `SessionState`。
 - `AssistantMessage` 可包含标准化 `ThinkingBlock`；它不并入用户可见文本，但会随会话
   持久化。可选 `replay_field` 只记录 OpenAI-compatible 接口回传推理内容所需的字段名。
 - OpenAI-compatible Provider 使用同步 Chat Completions，将响应中第一个非空的
@@ -52,12 +56,14 @@ tool result 始终按原顺序完整配对。单轮默认最多调用模型 8 �
 2%)`。第二项为下一次响应保留完整输出空间，避免输入虽未达到 80%，却已挤占模型输出预算。
 
 压缩不删除 `SessionState.messages` 中的原始历史，只保存一个向前移动的 compaction
-checkpoint；Provider 看到的是 checkpoint 摘要加未压缩后缀。每次摘要只总结“已有 rolling
-summary + 本次新移出的历史”，system prompt 不进入摘要。摘要调用复用当前 Provider 和模型、
-关闭 tools、最多输出 2,048 tokens。自动摘要占用当前 turn 的模型调用预算；手动摘要位于
-turn 外，不受单 turn 调用次数限制；二者都累计 session usage。截断、失败或包含 tool call
-的摘要不得替换旧 checkpoint。第一版不做 tool result 的 microcompact/snip；REPL 的裸命令
-`/compact` 可在稳定会话边界强制执行一次同样的 rolling 压缩，不接收自定义压缩指令。
+checkpoint；Provider 看到的是 checkpoint 摘要加未压缩后缀。自动压缩总结“已有 rolling
+summary + 本次新移出的历史”并保留近期后缀；稳定边界的手动 `/compact` 尝试总结全部 active
+history。system prompt 不进入摘要。摘要调用复用当前 Provider 和模型、关闭 tools、最多输出
+2,048 tokens，并请求该 dialect 可提供的最小推理强度。候选 checkpoint 只有在相同估算器和
+tools 下满足 `tokens_after < tokens_before` 才能生效；否则保留旧 checkpoint，但仍累计已经
+发生的摘要 usage。自动摘要占用当前 turn 的模型调用预算；手动摘要位于 turn 外，不受单 turn
+调用次数限制。截断、失败、空文本或包含 tool call 的摘要不得替换旧 checkpoint。第一版不做
+tool result 的 microcompact/snip；裸命令 `/compact` 不接收自定义压缩指令。
 
 若模型因输出 token 限制停止，纯文本作为部分结果以 `limit_reached` 结束；若响应包含 tool
 calls，Runtime 不执行整批调用，而是逐个生成配对错误结果，并在模型调用预算允许时继续循环。

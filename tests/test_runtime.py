@@ -25,7 +25,12 @@ from coding_agent.core.types import (
 )
 from coding_agent.core.usage import Usage
 from coding_agent.permissions import PermissionDecision, PermissionRequest
-from coding_agent.providers import CompletionRequest, LLMProvider, ProviderError
+from coding_agent.providers import (
+    CompletionRequest,
+    LLMProvider,
+    ProviderError,
+    ReasoningLevel,
+)
 from coding_agent.tools import ReadFileTool, Tool, ToolContext, ToolInput
 
 
@@ -334,6 +339,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(old_marker, state.messages[0].content[0].text)
         self.assertEqual(provider.requests[0].tools, ())
         self.assertEqual(provider.requests[0].max_output_tokens, 2_048)
+        self.assertEqual(provider.requests[0].reasoning, ReasoningLevel.MINIMAL)
         self.assertIn("rolling checkpoint", provider.requests[0].system_prompt)
         active_text = "\n".join(
             block.text

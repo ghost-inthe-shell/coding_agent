@@ -30,8 +30,10 @@ from coding_agent.permissions import (
 from coding_agent.providers import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     AnthropicProvider,
+    ApiDialect,
     LLMProvider,
     OpenAICompatibleProvider,
+    ReasoningLevel,
 )
 from coding_agent.tools import (
     EditFileTool,
@@ -194,6 +196,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="OpenAI-compatible API base URL; API keys come from provider environment variables",
     )
     parser.add_argument(
+        "--api-dialect",
+        choices=tuple(dialect.value for dialect in ApiDialect),
+        default=ApiDialect.GENERIC.value,
+        help="OpenAI-compatible vendor extensions (default: generic)",
+    )
+    parser.add_argument(
+        "--reasoning",
+        choices=tuple(
+            level.value
+            for level in ReasoningLevel
+            if level is not ReasoningLevel.MINIMAL
+        ),
+        default=ReasoningLevel.DEFAULT.value,
+        help="main-request reasoning level (default: provider default)",
+    )
+    parser.add_argument(
         "--max-tokens",
         type=_positive_int,
         default=DEFAULT_MAX_OUTPUT_TOKENS,
@@ -216,6 +234,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.provider == "anthropic" and arguments.base_url is not None:
         parser.error("--base-url is only valid with the openai-compatible provider")
+    if arguments.provider == "anthropic" and arguments.api_dialect != "generic":
+        parser.error("--api-dialect is only valid with the openai-compatible provider")
+    if arguments.provider == "anthropic" and arguments.reasoning != "default":
+        parser.error("--reasoning is not implemented for the anthropic provider")
     try:
         ContextBudget(
             context_window=arguments.context_window,
@@ -247,6 +269,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.model,
             base_url=arguments.base_url,
             max_tokens=arguments.max_tokens,
+            api_dialect=ApiDialect(arguments.api_dialect),
+            reasoning=ReasoningLevel(arguments.reasoning),
         )
     except (ImportError, ValueError) as exc:
         parser.error(str(exc))
@@ -279,13 +303,21 @@ def _create_provider(
     *,
     base_url: str | None,
     max_tokens: int,
+    api_dialect: ApiDialect,
+    reasoning: ReasoningLevel,
 ) -> LLMProvider:
     if provider_name == "anthropic":
+        if api_dialect is not ApiDialect.GENERIC:
+            raise ValueError("api_dialect is only supported by openai-compatible")
+        if reasoning is not ReasoningLevel.DEFAULT:
+            raise ValueError("reasoning is not implemented for anthropic")
         return AnthropicProvider(model, max_tokens=max_tokens)
     return OpenAICompatibleProvider(
         model,
         base_url=base_url,
         max_tokens=max_tokens,
+        dialect=api_dialect,
+        reasoning=reasoning,
     )
 
 

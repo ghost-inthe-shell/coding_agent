@@ -25,6 +25,7 @@ from coding_agent.providers import (
     CompletionRequest,
     LLMProvider,
     ProviderError,
+    ReasoningLevel,
 )
 from coding_agent.tools import ArtifactStore, Tool, ToolContext, ToolExecutor, ToolResultProcessor
 from coding_agent.tools.base import ToolSpec
@@ -441,6 +442,7 @@ class Runtime:
                 messages=plan.messages,
                 tools=(),
                 max_output_tokens=DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+                reasoning=ReasoningLevel.MINIMAL,
             )
         )
         if model_call is not None:
