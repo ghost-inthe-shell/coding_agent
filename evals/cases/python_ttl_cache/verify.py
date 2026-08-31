@@ -43,9 +43,7 @@ def verify(workspace: Path) -> None:
         timeout=10,
     )
     if public_tests.returncode != 0:
-        raise AssertionError(
-            "public tests failed:\n" + public_tests.stdout + public_tests.stderr
-        )
+        raise AssertionError("public tests failed:\n" + public_tests.stdout + public_tests.stderr)
 
     module = load_candidate(workspace)
     cache_class = getattr(module, "TTLCache", None)

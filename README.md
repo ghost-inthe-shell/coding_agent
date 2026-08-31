@@ -201,3 +201,36 @@ workspace 根目录启动，并使用 120 秒默认超时。
 python3 -m pip install -e .
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
+
+### 真实任务验收
+
+`evals/` 提供三个不调用 LLM judge 的确定性任务：
+
+- `cpp_binary_search`：读取题面，修复 C++ 二分边界并编译验证。
+- `python_ttl_cache`：根据失败测试修复 Python 到期边界。
+- `python_task_priority`：跨模型、存储和 CLI 实现向后兼容的新功能。
+
+先复制一个干净 workspace，再把 `prepare` 打印的任务说明原样发给 Agent：
+
+```bash
+python3 evals/run.py list
+python3 evals/run.py prepare cpp_binary_search /tmp/coding-agent-eval/cpp_binary_search
+
+coding-agent \
+  --provider openai-compatible \
+  --workspace /tmp/coding-agent-eval/cpp_binary_search \
+  --model <model> \
+  --base-url <base-url>
+```
+
+Agent 结束后从项目根目录运行外部 verifier：
+
+```bash
+python3 evals/run.py verify \
+  cpp_binary_search \
+  /tmp/coding-agent-eval/cpp_binary_search
+```
+
+不同版本之间比较时，应固定模型、Provider、reasoning、`--max-tokens`、`--max-turns` 和任务
+初始版本，并保留 session ID。完整协议、安全边界和其他 case 用法见
+[`evals/README.md`](evals/README.md)。

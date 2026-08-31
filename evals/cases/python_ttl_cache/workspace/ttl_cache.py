@@ -26,9 +26,7 @@ class TTLCache:
 
     def __len__(self) -> int:
         now = self._clock()
-        expired = [
-            key for key, (_, expires_at) in self._entries.items() if expires_at < now
-        ]
+        expired = [key for key, (_, expires_at) in self._entries.items() if expires_at < now]
         for key in expired:
             del self._entries[key]
         return len(self._entries)

@@ -21,9 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def format_tasks(tasks: list[Task]) -> str:
-    return "\n".join(
-        f"[{'x' if task.completed else ' '}] {task.title}" for task in tasks
-    )
+    return "\n".join(f"[{'x' if task.completed else ' '}] {task.title}" for task in tasks)
 
 
 def main(argv: list[str] | None = None) -> int:

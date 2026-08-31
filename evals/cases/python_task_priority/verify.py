@@ -32,9 +32,7 @@ def verify(workspace: Path) -> None:
         workspace,
     )
     if public_tests.returncode != 0:
-        raise AssertionError(
-            "public tests failed:\n" + public_tests.stdout + public_tests.stderr
-        )
+        raise AssertionError("public tests failed:\n" + public_tests.stdout + public_tests.stderr)
 
     sys.path.insert(0, str(workspace))
     try:

@@ -4,6 +4,10 @@
 原生 tool calling，但不使用 agent 框架、agent SDK 或服务端托管的代码/文件执行能力。
 第一版采用同步 Runtime，并以 Linux 为首要运行环境。
 
+真实任务验收使用干净 workspace 副本和 Agent 结束后运行的确定性外部 verifier，不比较参考
+diff，也不使用 LLM judge。无人值守评测必须在一次性容器内运行；容器隔离完成前只做逐次确认
+权限的人工监督验收。
+
 交互客户端直接采用同步 REPL，并在同一个 `SessionState` 上执行多轮对话。第一版提供 help、
 compact 和 exit 命令，Linux 交互 TTY 使用 Python 标准库 GNU readline 编辑，并显式启用
 bracketed paste。普通 Enter 提交；奇数个行尾反斜杠表示移除最后一个反斜杠并继续收集下一行，
