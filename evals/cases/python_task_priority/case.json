@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "id": "python_task_priority",
+  "title": "为任务清单增加持久化优先级",
+  "category": "feature",
+  "language": "Python",
+  "timeout_seconds": 30
+}
