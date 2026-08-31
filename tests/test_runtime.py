@@ -401,14 +401,45 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result.error_message, "turn model-call limit reached")
         self.assertIsNotNone(state.compaction)
 
+    def test_auto_compaction_rejects_a_checkpoint_without_token_reduction(self) -> None:
+        state = self.state()
+        state.messages.extend(
+            (
+                UserMessage.from_text("x" * 17_000, timestamp=1),
+                text_message("y" * 3_000),
+            )
+        )
+        runtime = Runtime(
+            SequenceProvider(
+                (
+                    text_message(
+                        "summary " + "z" * 18_000,
+                        usage=Usage(input_tokens=40, output_tokens=20),
+                    ),
+                )
+            ),
+            (),
+            state_home=self.root,
+            context_window=8_000,
+        )
+
+        result = runtime.run_turn(state, "continue")
+
+        self.assertEqual(result.status, RunStatus.PROVIDER_ERROR)
+        self.assertEqual(result.model_turns, 1)
+        self.assertEqual(result.usage, Usage(input_tokens=40, output_tokens=20))
+        self.assertIn("did not reduce estimated context", result.error_message)
+        self.assertIsNone(state.compaction)
+        self.assertEqual(state.usage, result.usage)
+
     def test_manual_compaction_forces_one_rolling_checkpoint_below_threshold(self) -> None:
         state = self.state()
         state.messages.extend(
             (
-                UserMessage.from_text("old question", timestamp=1),
-                text_message("old answer"),
-                UserMessage.from_text("recent question", timestamp=2),
-                text_message("recent answer"),
+                UserMessage.from_text("old question " + "x" * 2_000, timestamp=1),
+                text_message("old answer " + "y" * 2_000),
+                UserMessage.from_text("recent question " + "z" * 2_000, timestamp=2),
+                text_message("recent answer " + "w" * 2_000),
             )
         )
         provider = SequenceProvider(
@@ -424,32 +455,62 @@ class RuntimeTests(unittest.TestCase):
         result = runtime.compact(state)
 
         self.assertTrue(result.compacted)
-        self.assertEqual(result.summarized_messages, 1)
+        self.assertEqual(result.summarized_messages, 4)
         self.assertIsNotNone(result.tokens_before)
         self.assertIsNotNone(result.tokens_after)
         self.assertEqual(result.usage, Usage(input_tokens=30, output_tokens=4))
         self.assertEqual(len(state.messages), 4)
-        self.assertEqual(state.messages[0].content[0].text, "old question")
+        self.assertTrue(state.messages[0].content[0].text.startswith("old question"))
         self.assertIsNotNone(state.compaction)
         assert state.compaction is not None
         self.assertEqual(state.compaction.summary, "manual rolling summary")
-        self.assertEqual(state.compaction.first_kept_message_index, 1)
+        self.assertEqual(state.compaction.first_kept_message_index, 4)
         self.assertEqual(state.usage, result.usage)
         self.assertEqual(provider.requests[0].tools, ())
         self.assertEqual(provider.requests[0].max_output_tokens, 2_048)
         state.validate()
 
-    def test_manual_compaction_without_two_message_groups_is_a_noop(self) -> None:
+    def test_manual_compaction_without_new_active_history_is_a_noop(self) -> None:
         provider = SequenceProvider(())
         state = self.state()
         state.messages.append(UserMessage.from_text("only message"))
+        state.compaction = CompactionCheckpoint(
+            summary="existing summary",
+            first_kept_message_index=1,
+            tokens_before=100,
+            created_at=10,
+        )
 
         result = Runtime(provider, (), state_home=self.root).compact(state)
 
         self.assertFalse(result.compacted)
         self.assertIsNone(result.error_message)
         self.assertEqual(provider.requests, [])
+        self.assertIsNotNone(state.compaction)
+
+    def test_manual_compaction_rejects_summary_that_does_not_reduce_context(self) -> None:
+        state = self.state()
+        state.messages.append(UserMessage.from_text("short message", timestamp=1))
+        provider = SequenceProvider(
+            (
+                text_message(
+                    "summary " + "x" * 1_000,
+                    usage=Usage(input_tokens=20, output_tokens=10),
+                ),
+            )
+        )
+
+        result = Runtime(provider, (), state_home=self.root).compact(state)
+
+        self.assertFalse(result.compacted)
+        self.assertIsNone(result.error_message)
+        self.assertIsNotNone(result.tokens_before)
+        self.assertIsNotNone(result.tokens_after)
+        assert result.tokens_before is not None
+        assert result.tokens_after is not None
+        self.assertGreaterEqual(result.tokens_after, result.tokens_before)
         self.assertIsNone(state.compaction)
+        self.assertEqual(state.usage, Usage(input_tokens=20, output_tokens=10))
 
     def test_invalid_manual_summary_keeps_prior_checkpoint_and_records_usage(self) -> None:
         state = self.state()

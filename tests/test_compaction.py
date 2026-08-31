@@ -107,7 +107,8 @@ class CompactionTests(unittest.TestCase):
         self.assertIn("previous summary", rendered)
         self.assertIn("new segment", rendered)
         self.assertNotIn("already summarized raw text", rendered)
-        self.assertEqual(plan.first_kept_message_index, 3)
+        self.assertEqual(plan.first_kept_message_index, 4)
+        self.assertEqual(plan.summarized_message_count, 2)
 
     def test_summary_response_must_be_complete_text_without_tools(self) -> None:
         plan = CompactionPlan((), 2, 500, 2)

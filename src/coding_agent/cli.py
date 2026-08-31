@@ -328,6 +328,13 @@ def _print_compaction_result(result: CompactionResult, output_stream: TextIO) ->
         )
     elif result.error_message is not None:
         _write(output_stream, f"[compact_error] {result.error_message}\n")
+    elif result.tokens_before is not None and result.tokens_after is not None:
+        _write(
+            output_stream,
+            "[compact] not applied: "
+            f"tokens_before={result.tokens_before}, "
+            f"tokens_after={result.tokens_after}\n",
+        )
     else:
         _write(output_stream, "[compact] nothing to compact\n")
 

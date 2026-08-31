@@ -202,6 +202,35 @@ class ReplTests(unittest.TestCase):
         self.assertEqual(store.saved, [])
         self.assertIn("[compact] nothing to compact", output.getvalue())
 
+    def test_compact_without_token_reduction_reports_metrics_and_saves_usage(self) -> None:
+        runtime = RecordingRuntime(
+            [],
+            [
+                CompactionResult(
+                    compacted=False,
+                    usage=Usage(input_tokens=20, output_tokens=10),
+                    tokens_before=120,
+                    tokens_after=180,
+                )
+            ],
+        )
+        store = RecordingSessionStore()
+        output = StringIO()
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            session_store=store,
+            input_stream=StringIO("/compact\n/exit\n"),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(store.saved, [self.state])
+        self.assertIn("[compact] not applied", output.getvalue())
+        self.assertIn("tokens_before=120", output.getvalue())
+        self.assertIn("tokens_after=180", output.getvalue())
+
     def test_invalid_compaction_is_reported_and_usage_is_checkpointed(self) -> None:
         runtime = RecordingRuntime(
             [],

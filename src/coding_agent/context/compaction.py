@@ -63,22 +63,31 @@ def prepare_compaction(
         return None
 
     start = state.compaction.first_kept_message_index if state.compaction else 0
-    cut = find_compaction_cut(
-        state.messages,
-        start,
-        budget.keep_recent_tokens,
-    )
-    if cut is None:
+    groups = _message_groups(state.messages, start)
+    if not groups:
         return None
+
+    if force:
+        cut = len(state.messages)
+    else:
+        cut = find_compaction_cut(
+            state.messages,
+            start,
+            budget.keep_recent_tokens,
+        )
+        if cut is None:
+            return None
 
     if summary_input_token_limit is not None and summary_input_token_limit <= 0:
         raise ValueError("summary_input_token_limit must be positive")
 
     candidate_cuts = [
         group_start
-        for group_start, _ in _message_groups(state.messages, start)[1:]
+        for group_start, _ in groups[1:]
         if group_start <= cut
     ]
+    if cut == len(state.messages):
+        candidate_cuts.append(cut)
     summary_input: tuple[Message, ...] | None = None
     for candidate in reversed(candidate_cuts):
         candidate_input = _summary_input(state, start, candidate)

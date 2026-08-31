@@ -29,6 +29,7 @@ from coding_agent.providers import (
 from coding_agent.tools import ArtifactStore, Tool, ToolContext, ToolExecutor, ToolResultProcessor
 from coding_agent.tools.base import ToolSpec
 
+from .compaction import CompactionCheckpoint
 from .events import (
     EventSink,
     ModelRequested,
@@ -130,7 +131,12 @@ class Runtime:
         state.usage = state.usage + response.usage
         state.touch()
         try:
-            checkpoint = checkpoint_from_summary(plan, response)
+            checkpoint, tokens_after = self._evaluate_compaction(
+                state,
+                tools,
+                plan,
+                response,
+            )
         except ContextCompactionError as exc:
             return CompactionResult(
                 compacted=False,
@@ -138,13 +144,16 @@ class Runtime:
                 error_message=str(exc),
             )
 
+        if tokens_after >= plan.tokens_before:
+            return CompactionResult(
+                compacted=False,
+                usage=response.usage,
+                tokens_before=plan.tokens_before,
+                tokens_after=tokens_after,
+            )
+
         state.compaction = checkpoint
         state.validate()
-        tokens_after = estimate_request_tokens(
-            state.system_prompt,
-            active_messages(state),
-            tools,
-        )
         return CompactionResult(
             compacted=True,
             usage=response.usage,
@@ -377,8 +386,19 @@ class Runtime:
             response = self._request_compaction(state, plan, model_call=model_call)
             progress.record_model(response)
             state.usage = state.usage + response.usage
-            state.compaction = checkpoint_from_summary(plan, response)
             state.touch()
+            checkpoint, tokens_after = self._evaluate_compaction(
+                state,
+                tools,
+                plan,
+                response,
+            )
+            if tokens_after >= plan.tokens_before:
+                raise ContextCompactionError(
+                    "compaction did not reduce estimated context: "
+                    f"before={plan.tokens_before}, after={tokens_after}"
+                )
+            state.compaction = checkpoint
             state.validate()
 
     def _make_compaction_plan(
@@ -426,6 +446,22 @@ class Runtime:
         if model_call is not None:
             self._emit(ModelResponded(state.session_id, model_call, response))
         return response
+
+    def _evaluate_compaction(
+        self,
+        state: SessionState,
+        tools: tuple[ToolSpec, ...],
+        plan: CompactionPlan,
+        response: AssistantMessage,
+    ) -> tuple[CompactionCheckpoint, int]:
+        checkpoint = checkpoint_from_summary(plan, response)
+        candidate = replace(state, compaction=checkpoint)
+        tokens_after = estimate_request_tokens(
+            candidate.system_prompt,
+            active_messages(candidate),
+            tools,
+        )
+        return checkpoint, tokens_after
 
     def _ensure_context_fits(
         self,
