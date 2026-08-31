@@ -47,10 +47,20 @@ from .session import SessionState
 from .types import RunStatus, SessionStatus, StopReason
 from .usage import Usage
 
+DEFAULT_MAX_MODEL_CALLS = 32
+
+_FINAL_MODEL_CALL_INSTRUCTION = """
+# Runtime limit
+
+This is the final model call available for the current user turn. No tools are available. Give a
+concise final response that states what was completed, what remains incomplete, and any next step
+the user needs to take. Do not claim that unverified work succeeded.
+""".strip()
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeLimits:
-    max_model_calls: int = 8
+    max_model_calls: int = DEFAULT_MAX_MODEL_CALLS
     max_tool_calls: int = 32
 
     def __post_init__(self) -> None:
@@ -62,10 +72,16 @@ class RuntimeLimits:
 class _TurnProgress:
     usage: Usage = field(default_factory=Usage)
     model_calls: int = 0
+    provider_calls: int = 0
     tool_calls: int = 0
 
-    def record_model(self, message: AssistantMessage) -> None:
+    def record_agent_model(self, message: AssistantMessage) -> None:
         self.model_calls += 1
+        self.provider_calls += 1
+        self.usage = self.usage + message.usage
+
+    def record_internal_model(self, message: AssistantMessage) -> None:
+        self.provider_calls += 1
         self.usage = self.usage + message.usage
 
 
@@ -184,15 +200,16 @@ class Runtime:
 
         try:
             while progress.model_calls < self._limits.max_model_calls:
-                self._auto_compact(state, executor.specs, progress)
-                if progress.model_calls >= self._limits.max_model_calls:
-                    break
+                final_model_call = progress.model_calls + 1 == self._limits.max_model_calls
+                available_tools = () if final_model_call else executor.specs
+                self._auto_compact(state, available_tools, progress)
                 assistant = self._complete(
                     state,
-                    executor.specs,
-                    progress.model_calls + 1,
+                    available_tools,
+                    progress.provider_calls + 1,
+                    final_model_call=final_model_call,
                 )
-                progress.record_model(assistant)
+                progress.record_agent_model(assistant)
                 state.usage = state.usage + assistant.usage
                 state.messages.append(assistant)
                 state.touch()
@@ -254,6 +271,23 @@ class Runtime:
                             error_message="model output-token limit reached",
                         ),
                     )
+                if final_model_call:
+                    if assistant.tool_calls:
+                        raise RuntimeError(
+                            "provider returned tool calls when no tools were offered"
+                        )
+                    return self._finish(
+                        state,
+                        RunResult(
+                            status=RunStatus.LIMIT_REACHED,
+                            final_text=assistant.text,
+                            usage=progress.usage,
+                            model_turns=progress.model_calls,
+                            tool_calls=progress.tool_calls,
+                            stop_reason=assistant.stop_reason,
+                            error_message="turn model-call limit reached",
+                        ),
+                    )
                 if not assistant.tool_calls:
                     return self._finish(
                         state,
@@ -290,8 +324,13 @@ class Runtime:
                     if progress.model_calls < self._limits.max_model_calls:
                         self._auto_compact(state, (), progress)
                     if progress.model_calls < self._limits.max_model_calls:
-                        final = self._complete(state, (), progress.model_calls + 1)
-                        progress.record_model(final)
+                        final = self._complete(
+                            state,
+                            (),
+                            progress.provider_calls + 1,
+                            final_model_call=True,
+                        )
+                        progress.record_agent_model(final)
                         state.usage = state.usage + final.usage
                         if final.tool_calls:
                             raise RuntimeError(
@@ -359,11 +398,16 @@ class Runtime:
         state: SessionState,
         tools: tuple[ToolSpec, ...],
         model_call: int,
+        *,
+        final_model_call: bool = False,
     ) -> AssistantMessage:
         self._emit(ModelRequested(state.session_id, model_call))
+        system_prompt = state.system_prompt
+        if final_model_call:
+            system_prompt = f"{system_prompt}\n\n{_FINAL_MODEL_CALL_INSTRUCTION}"
         message = self._provider.complete(
             CompletionRequest(
-                system_prompt=state.system_prompt,
+                system_prompt=system_prompt,
                 messages=active_messages(state),
                 tools=tools,
             )
@@ -377,15 +421,15 @@ class Runtime:
         tools: tuple[ToolSpec, ...],
         progress: _TurnProgress,
     ) -> None:
-        while progress.model_calls < self._limits.max_model_calls:
+        while True:
             plan = self._make_compaction_plan(state, tools)
             if plan is None:
                 self._ensure_context_fits(state, tools)
                 return
 
-            model_call = progress.model_calls + 1
+            model_call = progress.provider_calls + 1
             response = self._request_compaction(state, plan, model_call=model_call)
-            progress.record_model(response)
+            progress.record_internal_model(response)
             state.usage = state.usage + response.usage
             state.touch()
             checkpoint, tokens_after = self._evaluate_compaction(

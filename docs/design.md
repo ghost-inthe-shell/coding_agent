@@ -42,10 +42,11 @@ help、compact 和 exit 命令，Linux 交互 TTY 使用 Python 标准库 GNU re
 ## Runtime
 
 `Runtime.run_turn(state, user_input)` 执行一个同步的模型/工具循环。Assistant tool call 与
-tool result 始终按原顺序完整配对。单轮默认最多调用模型 8 次、实际执行工具 32 次。若同一
-批调用超过工具预算，所有跳过的调用都会收到合成错误结果；如果还剩一次模型预算，Runtime
-会发出不带工具的最终请求。即使该请求返回了有用文本，`RunResult` 仍标记为
-`limit_reached`。
+tool result 始终按原顺序完整配对。单轮默认最多执行 32 次 Agent 模型调用、实际执行工具
+32 次；最后一次 Agent 调用固定不提供工具，用于说明已完成内容、未完成内容和后续步骤。
+若同一批调用超过工具预算，所有跳过的调用都会收到合成错误结果，并在剩余模型预算内发出
+不带工具的最终请求。因任一预算进入最终请求时，即使模型返回了有用文本，`RunResult` 仍标记
+为 `limit_reached`。
 
 两个 Provider 的单次默认输出上限统一为 16,384 tokens。`RunResult.max_output_tokens`
 记录单次请求上限，而 `RunResult.usage.output_tokens` 是整个 turn 多次模型调用的累计值。
@@ -61,9 +62,10 @@ summary + 本次新移出的历史”并保留近期后缀；稳定边界的手�
 history。system prompt 不进入摘要。摘要调用复用当前 Provider 和模型、关闭 tools、最多输出
 2,048 tokens，并请求该 dialect 可提供的最小推理强度。候选 checkpoint 只有在相同估算器和
 tools 下满足 `tokens_after < tokens_before` 才能生效；否则保留旧 checkpoint，但仍累计已经
-发生的摘要 usage。自动摘要占用当前 turn 的模型调用预算；手动摘要位于 turn 外，不受单 turn
-调用次数限制。截断、失败、空文本或包含 tool call 的摘要不得替换旧 checkpoint。第一版不做
-tool result 的 microcompact/snip；裸命令 `/compact` 不接收自定义压缩指令。
+发生的摘要 usage。自动摘要属于 Runtime 内部维护调用：计入本 turn 和 session 的 token usage，
+但不占 Agent 模型调用预算；事件中的 Provider 调用序号仍包含它。手动摘要位于 turn 外，也不受
+单 turn 调用次数限制。截断、失败、空文本或包含 tool call 的摘要不得替换旧 checkpoint。
+第一版不做 tool result 的 microcompact/snip；裸命令 `/compact` 不接收自定义压缩指令。
 
 若模型因输出 token 限制停止，纯文本作为部分结果以 `limit_reached` 结束；若响应包含 tool
 calls，Runtime 不执行整批调用，而是逐个生成配对错误结果，并在模型调用预算允许时继续循环。

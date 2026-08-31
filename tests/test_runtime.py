@@ -6,7 +6,7 @@ from pathlib import Path
 from pydantic import Field
 
 from coding_agent.core.compaction import CompactionCheckpoint
-from coding_agent.core.events import TurnFinished
+from coding_agent.core.events import ModelRequested, TurnFinished
 from coding_agent.core.messages import (
     AssistantMessage,
     TextBlock,
@@ -290,12 +290,15 @@ class RuntimeTests(unittest.TestCase):
 
     def test_model_call_budget_has_a_distinct_result(self) -> None:
         provider = SequenceProvider(
-            (tool_message(ToolCall(id="call-1", name="echo", arguments={"text": "x"})),)
+            (
+                tool_message(ToolCall(id="call-1", name="echo", arguments={"text": "x"})),
+                text_message("budget summary"),
+            )
         )
         runtime = Runtime(
             provider,
             (EchoTool(),),
-            limits=RuntimeLimits(max_model_calls=1, max_tool_calls=2),
+            limits=RuntimeLimits(max_model_calls=2, max_tool_calls=2),
             state_home=self.root,
         )
 
@@ -303,9 +306,13 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(result.status, RunStatus.LIMIT_REACHED)
         self.assertEqual(result.error_message, "turn model-call limit reached")
-        self.assertEqual(result.model_turns, 1)
+        self.assertEqual(result.final_text, "budget summary")
+        self.assertEqual(result.model_turns, 2)
         self.assertEqual(result.tool_calls, 1)
         self.assertEqual(result.max_output_tokens, 2048)
+        self.assertNotEqual(provider.requests[0].tools, ())
+        self.assertEqual(provider.requests[1].tools, ())
+        self.assertIn("final model call", provider.requests[1].system_prompt)
 
     def test_auto_compaction_uses_summary_then_sends_only_active_history(self) -> None:
         old_marker = "old-marker-" + "x" * 17_000
@@ -325,12 +332,19 @@ class RuntimeTests(unittest.TestCase):
                 text_message("done", usage=Usage(input_tokens=60, output_tokens=4)),
             )
         )
-        runtime = Runtime(provider, (), state_home=self.root, context_window=8_000)
+        events = []
+        runtime = Runtime(
+            provider,
+            (),
+            event_sink=events.append,
+            state_home=self.root,
+            context_window=8_000,
+        )
 
         result = runtime.run_turn(state, "continue")
 
         self.assertEqual(result.status, RunStatus.COMPLETED)
-        self.assertEqual(result.model_turns, 2)
+        self.assertEqual(result.model_turns, 1)
         self.assertEqual(result.usage.input_tokens, 110)
         self.assertEqual(result.usage.output_tokens, 9)
         self.assertIsNotNone(state.compaction)
@@ -350,6 +364,8 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertIn("rolling summary", active_text)
         self.assertNotIn(old_marker, active_text)
+        model_requests = [event for event in events if isinstance(event, ModelRequested)]
+        self.assertEqual([event.model_call for event in model_requests], [1, 2])
         state.validate()
 
     def test_invalid_compaction_response_fails_without_replacing_checkpoint(self) -> None:
@@ -378,13 +394,13 @@ class RuntimeTests(unittest.TestCase):
         result = runtime.run_turn(state, "continue")
 
         self.assertEqual(result.status, RunStatus.PROVIDER_ERROR)
-        self.assertEqual(result.model_turns, 1)
+        self.assertEqual(result.model_turns, 0)
         self.assertEqual(result.usage.input_tokens, 50)
         self.assertIn("unexpectedly contained tool calls", result.error_message)
         self.assertIsNone(state.compaction)
         state.validate()
 
-    def test_compaction_consumes_the_same_model_call_budget(self) -> None:
+    def test_compaction_does_not_consume_the_agent_model_call_budget(self) -> None:
         state = self.state()
         state.messages.extend(
             (
@@ -393,7 +409,7 @@ class RuntimeTests(unittest.TestCase):
             )
         )
         runtime = Runtime(
-            SequenceProvider((text_message("summary"),)),
+            SequenceProvider((text_message("summary"), text_message("budget summary"))),
             (),
             limits=RuntimeLimits(max_model_calls=1),
             state_home=self.root,
@@ -404,6 +420,7 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(result.status, RunStatus.LIMIT_REACHED)
         self.assertEqual(result.model_turns, 1)
+        self.assertEqual(result.final_text, "budget summary")
         self.assertEqual(result.error_message, "turn model-call limit reached")
         self.assertIsNotNone(state.compaction)
 
@@ -432,7 +449,7 @@ class RuntimeTests(unittest.TestCase):
         result = runtime.run_turn(state, "continue")
 
         self.assertEqual(result.status, RunStatus.PROVIDER_ERROR)
-        self.assertEqual(result.model_turns, 1)
+        self.assertEqual(result.model_turns, 0)
         self.assertEqual(result.usage, Usage(input_tokens=40, output_tokens=20))
         self.assertIn("did not reduce estimated context", result.error_message)
         self.assertIsNone(state.compaction)
