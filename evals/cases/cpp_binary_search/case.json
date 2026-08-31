@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "id": "cpp_binary_search",
+  "title": "修复重复元素的二分查找边界",
+  "category": "bugfix",
+  "language": "C++",
+  "timeout_seconds": 30
+}
