@@ -1,5 +1,5 @@
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 
 from coding_agent.core.messages import (
     AssistantMessage,
@@ -12,9 +12,11 @@ from coding_agent.core.messages import (
 from coding_agent.core.types import StopReason, ToolResultStatus
 from coding_agent.providers import (
     DEFAULT_MAX_OUTPUT_TOKENS,
+    ApiDialect,
     CompletionRequest,
     OpenAICompatibleProvider,
     ProviderError,
+    ReasoningLevel,
 )
 from coding_agent.tools.base import ToolSpec
 
@@ -221,6 +223,119 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
         )
 
         self.assertEqual(completions.arguments["max_tokens"], 2_048)
+
+    def test_reasoning_levels_are_mapped_by_explicit_api_dialect(self) -> None:
+        cases = (
+            (
+                ApiDialect.DEEPSEEK,
+                ReasoningLevel.OFF,
+                {"extra_body": {"thinking": {"type": "disabled"}}},
+            ),
+            (
+                ApiDialect.DEEPSEEK,
+                ReasoningLevel.LOW,
+                {
+                    "reasoning_effort": "low",
+                    "extra_body": {"thinking": {"type": "enabled"}},
+                },
+            ),
+            (
+                ApiDialect.DASHSCOPE,
+                ReasoningLevel.OFF,
+                {"extra_body": {"enable_thinking": False}},
+            ),
+            (
+                ApiDialect.DASHSCOPE,
+                ReasoningLevel.MEDIUM,
+                {"extra_body": {"reasoning_effort": "medium"}},
+            ),
+            (
+                ApiDialect.MOONSHOT,
+                ReasoningLevel.OFF,
+                {"extra_body": {"thinking": {"type": "disabled"}}},
+            ),
+        )
+        for dialect, reasoning, expected in cases:
+            with self.subTest(dialect=dialect, reasoning=reasoning):
+                completions = FakeCompletions(response())
+                provider = OpenAICompatibleProvider(
+                    "model",
+                    dialect=dialect,
+                    reasoning=reasoning,
+                    client=FakeClient(completions),
+                )
+
+                provider.complete(
+                    CompletionRequest(messages=(), system_prompt="System")
+                )
+
+                for name, value in expected.items():
+                    self.assertEqual(completions.arguments[name], value)
+
+    def test_minimal_reasoning_overrides_main_request_configuration(self) -> None:
+        cases = (
+            (
+                ApiDialect.GENERIC,
+                ReasoningLevel.DEFAULT,
+                {},
+            ),
+            (
+                ApiDialect.DEEPSEEK,
+                ReasoningLevel.HIGH,
+                {"extra_body": {"thinking": {"type": "disabled"}}},
+            ),
+            (
+                ApiDialect.DASHSCOPE,
+                ReasoningLevel.HIGH,
+                {"extra_body": {"reasoning_effort": "low"}},
+            ),
+            (
+                ApiDialect.MOONSHOT,
+                ReasoningLevel.DEFAULT,
+                {"extra_body": {"thinking": {"type": "disabled"}}},
+            ),
+        )
+        for dialect, main_reasoning, expected in cases:
+            with self.subTest(dialect=dialect):
+                completions = FakeCompletions(response())
+                provider = OpenAICompatibleProvider(
+                    "model",
+                    dialect=dialect,
+                    reasoning=main_reasoning,
+                    client=FakeClient(completions),
+                )
+
+                provider.complete(
+                    CompletionRequest(
+                        messages=(),
+                        system_prompt="Summarize",
+                        reasoning=ReasoningLevel.MINIMAL,
+                    )
+                )
+
+                for name, value in expected.items():
+                    self.assertEqual(completions.arguments[name], value)
+                if not expected:
+                    self.assertNotIn("extra_body", completions.arguments)
+                    self.assertNotIn("reasoning_effort", completions.arguments)
+
+    def test_rejects_reasoning_level_unsupported_by_selected_dialect(self) -> None:
+        invalid = (
+            (ApiDialect.GENERIC, ReasoningLevel.LOW),
+            (ApiDialect.DEEPSEEK, ReasoningLevel.MEDIUM),
+            (ApiDialect.MOONSHOT, ReasoningLevel.HIGH),
+            (ApiDialect.DEEPSEEK, ReasoningLevel.MINIMAL),
+        )
+        for dialect, reasoning in invalid:
+            with self.subTest(dialect=dialect, reasoning=reasoning), self.assertRaises(
+                ValueError
+            ):
+                OpenAICompatibleProvider(
+                    "model",
+                    dialect=dialect,
+                    reasoning=reasoning,
+                    client=FakeClient(FakeCompletions(response())),
+                )
 
     def test_preserves_truncated_tool_calls_for_runtime_rejection(self) -> None:
         raw_call = namespace(

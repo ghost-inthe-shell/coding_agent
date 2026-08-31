@@ -1,5 +1,5 @@
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 
 from coding_agent.core.messages import (
     AssistantMessage,
@@ -15,6 +15,7 @@ from coding_agent.providers import (
     AnthropicProvider,
     CompletionRequest,
     ProviderError,
+    ReasoningLevel,
 )
 from coding_agent.tools.base import ToolSpec
 
@@ -140,6 +141,34 @@ class AnthropicProviderTests(unittest.TestCase):
         self.assertEqual(result.stop_reason, StopReason.TOOL_USE)
         self.assertEqual(result.tool_calls[0].arguments, {"path": "README.md"})
 
+    def test_minimal_reasoning_uses_current_non_thinking_request(self) -> None:
+        messages = FakeMessages(response())
+        provider = AnthropicProvider("model", client=FakeClient(messages))
+
+        provider.complete(
+            CompletionRequest(
+                messages=(),
+                system_prompt="Summarize",
+                reasoning=ReasoningLevel.MINIMAL,
+            )
+        )
+
+        self.assertNotIn("thinking", messages.arguments)
+
+    def test_rejects_unimplemented_anthropic_reasoning_level(self) -> None:
+        provider = AnthropicProvider(
+            "model",
+            client=FakeClient(FakeMessages(response())),
+        )
+
+        with self.assertRaisesRegex(ProviderError, "not implemented"):
+            provider.complete(
+                CompletionRequest(
+                    messages=(),
+                    system_prompt="System",
+                    reasoning=ReasoningLevel.HIGH,
+                )
+            )
     def test_preserves_non_object_tool_input_as_parse_error(self) -> None:
         tool_use = namespace(type="tool_use", id="call-1", name="read_file", input="bad")
         provider = AnthropicProvider(

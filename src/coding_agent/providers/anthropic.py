@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from coding_agent.core.messages import (
@@ -20,6 +20,7 @@ from coding_agent.core.usage import Usage
 from coding_agent.tools.base import ToolSpec
 
 from .base import DEFAULT_MAX_OUTPUT_TOKENS, CompletionRequest, LLMProvider, ProviderError
+from .reasoning import ReasoningLevel
 
 
 class AnthropicProvider(LLMProvider):
@@ -55,6 +56,14 @@ class AnthropicProvider(LLMProvider):
         return self.max_tokens
 
     def complete(self, request: CompletionRequest) -> AssistantMessage:
+        if request.reasoning not in {
+            ReasoningLevel.DEFAULT,
+            ReasoningLevel.OFF,
+            ReasoningLevel.MINIMAL,
+        }:
+            raise ProviderError(
+                "reasoning levels are not implemented for the Anthropic provider"
+            )
         arguments: dict[str, Any] = {
             "model": self.model,
             "max_tokens": min(

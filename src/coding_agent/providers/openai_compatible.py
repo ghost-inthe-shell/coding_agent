@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from coding_agent.core.messages import (
@@ -20,6 +20,7 @@ from coding_agent.core.usage import Usage
 from coding_agent.tools.base import ToolSpec
 
 from .base import DEFAULT_MAX_OUTPUT_TOKENS, CompletionRequest, LLMProvider, ProviderError
+from .reasoning import ApiDialect, ReasoningLevel
 
 _REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
 
@@ -32,14 +33,23 @@ class OpenAICompatibleProvider(LLMProvider):
         api_key: str | None = None,
         base_url: str | None = None,
         max_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        dialect: ApiDialect = ApiDialect.GENERIC,
+        reasoning: ReasoningLevel = ReasoningLevel.DEFAULT,
         client: Any | None = None,
     ) -> None:
         if not model:
             raise ValueError("model must not be empty")
         if max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
+        if not isinstance(dialect, ApiDialect):
+            raise TypeError("dialect must be an ApiDialect")
+        if not isinstance(reasoning, ReasoningLevel):
+            raise TypeError("reasoning must be a ReasoningLevel")
+        _validate_configured_reasoning(dialect, reasoning)
         self.model = model
         self.max_tokens = max_tokens
+        self.dialect = dialect
+        self.reasoning = reasoning
         if client is not None:
             self._client = client
             return
@@ -69,6 +79,12 @@ class OpenAICompatibleProvider(LLMProvider):
         }
         if request.tools:
             arguments["tools"] = [_convert_tool(spec) for spec in request.tools]
+        requested_reasoning = (
+            self.reasoning
+            if request.reasoning is ReasoningLevel.DEFAULT
+            else request.reasoning
+        )
+        arguments.update(_reasoning_arguments(self.dialect, requested_reasoning))
 
         try:
             response = self._client.chat.completions.create(**arguments)
@@ -258,3 +274,72 @@ def _required_text(value: Any, name: str, label: str) -> str:
     if not isinstance(field, str) or not field:
         raise ProviderError(f"OpenAI-compatible response contained an invalid {label}")
     return field
+
+
+def _validate_configured_reasoning(
+    dialect: ApiDialect,
+    reasoning: ReasoningLevel,
+) -> None:
+    if reasoning is ReasoningLevel.MINIMAL:
+        raise ValueError("minimal reasoning is reserved for internal requests")
+    supported = {
+        ApiDialect.GENERIC: {ReasoningLevel.DEFAULT},
+        ApiDialect.DEEPSEEK: {
+            ReasoningLevel.DEFAULT,
+            ReasoningLevel.OFF,
+            ReasoningLevel.LOW,
+            ReasoningLevel.HIGH,
+            ReasoningLevel.MAX,
+        },
+        ApiDialect.DASHSCOPE: {
+            ReasoningLevel.DEFAULT,
+            ReasoningLevel.OFF,
+            ReasoningLevel.LOW,
+            ReasoningLevel.MEDIUM,
+            ReasoningLevel.HIGH,
+            ReasoningLevel.MAX,
+        },
+        ApiDialect.MOONSHOT: {
+            ReasoningLevel.DEFAULT,
+            ReasoningLevel.OFF,
+        },
+    }[dialect]
+    if reasoning not in supported:
+        raise ValueError(
+            f"reasoning level {reasoning.value!r} is not supported by "
+            f"the {dialect.value!r} API dialect"
+        )
+
+
+def _reasoning_arguments(
+    dialect: ApiDialect,
+    reasoning: ReasoningLevel,
+) -> dict[str, Any]:
+    if reasoning is ReasoningLevel.DEFAULT:
+        return {}
+    if reasoning is ReasoningLevel.MINIMAL:
+        if dialect is ApiDialect.GENERIC:
+            return {}
+        if dialect is ApiDialect.DASHSCOPE:
+            return {"extra_body": {"reasoning_effort": "low"}}
+        return {"extra_body": {"thinking": {"type": "disabled"}}}
+
+    try:
+        _validate_configured_reasoning(dialect, reasoning)
+    except ValueError as exc:
+        raise ProviderError(str(exc)) from exc
+
+    if dialect is ApiDialect.DEEPSEEK:
+        if reasoning is ReasoningLevel.OFF:
+            return {"extra_body": {"thinking": {"type": "disabled"}}}
+        return {
+            "reasoning_effort": reasoning.value,
+            "extra_body": {"thinking": {"type": "enabled"}},
+        }
+    if dialect is ApiDialect.DASHSCOPE:
+        if reasoning is ReasoningLevel.OFF:
+            return {"extra_body": {"enable_thinking": False}}
+        return {"extra_body": {"reasoning_effort": reasoning.value}}
+    if dialect is ApiDialect.MOONSHOT:
+        return {"extra_body": {"thinking": {"type": "disabled"}}}
+    raise AssertionError("generic dialect accepts only default reasoning")
