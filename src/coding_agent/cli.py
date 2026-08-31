@@ -48,6 +48,9 @@ HELP_TEXT = """Commands:
   /compact  Summarize older conversation history now.
   /help     Show this help.
   /exit     End the session.
+
+Input:
+  End a line with \\ and press Enter to insert a newline and continue at the ... prompt.
 """
 
 
@@ -103,7 +106,7 @@ class InteractivePermissionHandler:
         except KeyboardInterrupt:
             _write(self._output_stream, "\nDenied.\n")
             return PermissionDecision.DENY
-        if answer == "":
+        if answer is None:
             _write(self._output_stream, "\nDenied.\n")
             return PermissionDecision.DENY
         if answer.strip().lower() in {"y", "yes"}:
@@ -121,8 +124,9 @@ def run_repl(
     input_stream: TextIO = sys.stdin,
     output_stream: TextIO = sys.stdout,
 ) -> int:
-    """Run a single-line, multi-turn REPL over one SessionState."""
+    """Run a synchronous multi-turn REPL over one SessionState."""
 
+    _configure_terminal_input(input_stream, output_stream)
     _write(
         output_stream,
         f"Coding Agent\n"
@@ -132,24 +136,24 @@ def run_repl(
     )
     while True:
         try:
-            line = _read_line("> ", input_stream, output_stream)
+            prompt = _read_prompt(input_stream, output_stream)
         except KeyboardInterrupt:
             _write(output_stream, "\n")
             return 130
 
-        if line == "":
+        if prompt is None:
             _write(output_stream, "\n")
             return 0
 
-        user_input = line.strip()
-        if not user_input:
+        command = prompt.strip()
+        if not command:
             continue
-        if user_input == "/exit":
+        if command == "/exit":
             return 0
-        if user_input == "/help":
+        if command == "/help":
             _write(output_stream, HELP_TEXT)
             continue
-        if user_input == "/compact":
+        if command == "/compact":
             compaction = runtime.compact(state)
             _print_compaction_result(compaction, output_stream)
             if (
@@ -159,11 +163,11 @@ def run_repl(
             ):
                 return 1
             continue
-        if user_input.startswith("/"):
-            _write(output_stream, f"Unknown command: {user_input}\n")
+        if command.startswith("/"):
+            _write(output_stream, f"Unknown command: {command}\n")
             continue
 
-        result = runtime.run_turn(state, user_input)
+        result = runtime.run_turn(state, prompt)
         _print_result(result, output_stream)
         if (
             session_store is not None
@@ -402,22 +406,58 @@ def _write(stream: TextIO, text: str) -> None:
     stream.flush()
 
 
-def _read_line(prompt: str, input_stream: TextIO, output_stream: TextIO) -> str:
+def _configure_terminal_input(input_stream: TextIO, output_stream: TextIO) -> None:
+    if _uses_terminal_editor(input_stream, output_stream):
+        assert _readline is not None
+        _readline.parse_and_bind("set enable-bracketed-paste on")
+
+
+def _read_prompt(input_stream: TextIO, output_stream: TextIO) -> str | None:
+    """Read one prompt; an odd trailing backslash inserts a newline."""
+
+    lines: list[str] = []
+    prompt = "> "
+    while True:
+        line = _read_line(prompt, input_stream, output_stream)
+        if line is None:
+            return None
+        line = line.replace("\r\n", "\n").replace("\r", "\n")
+        trailing_backslashes = len(line) - len(line.rstrip("\\"))
+        if trailing_backslashes % 2 == 1:
+            lines.append(line[:-1])
+            prompt = "... "
+            continue
+        lines.append(line)
+        return "\n".join(lines)
+
+
+def _read_line(
+    prompt: str,
+    input_stream: TextIO,
+    output_stream: TextIO,
+) -> str | None:
     """Read one line, using GNU readline only for the real interactive terminal."""
 
-    if (
+    if _uses_terminal_editor(input_stream, output_stream):
+        try:
+            return input(prompt)
+        except EOFError:
+            return None
+
+    _write(output_stream, prompt)
+    line = input_stream.readline()
+    if line == "":
+        return None
+    return line.removesuffix("\n").removesuffix("\r")
+
+
+def _uses_terminal_editor(input_stream: TextIO, output_stream: TextIO) -> bool:
+    return (
         _readline is not None
         and input_stream is sys.stdin
         and output_stream is sys.stdout
         and input_stream.isatty()
-    ):
-        try:
-            return input(prompt)
-        except EOFError:
-            return ""
-
-    _write(output_stream, prompt)
-    return input_stream.readline()
+    )
 
 
 if __name__ == "__main__":

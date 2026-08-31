@@ -89,6 +89,56 @@ class ReplTests(unittest.TestCase):
         self.assertIn("assistant> first answer", output.getvalue())
         self.assertIn("assistant> second answer", output.getvalue())
 
+    def test_trailing_backslash_builds_one_multiline_prompt(self) -> None:
+        runtime = RecordingRuntime(
+            [RunResult(status=RunStatus.COMPLETED, final_text="answer")]
+        )
+        output = StringIO()
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            input_stream=StringIO("  first line\\\n\\\n  second line  \n/exit\n"),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            [call[1] for call in runtime.calls],
+            ["  first line\n\n  second line  "],
+        )
+        self.assertIn("> ... ... ", output.getvalue())
+
+    def test_eof_during_continuation_does_not_send_partial_prompt(self) -> None:
+        runtime = RecordingRuntime([])
+        output = StringIO()
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            input_stream=StringIO("partial\\\n"),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(runtime.calls, [])
+        self.assertIn("> ... ", output.getvalue())
+
+    def test_even_trailing_backslashes_are_submitted_literally(self) -> None:
+        runtime = RecordingRuntime(
+            [RunResult(status=RunStatus.COMPLETED, final_text="answer")]
+        )
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            input_stream=StringIO("literal\\\\\n/exit\n"),
+            output_stream=StringIO(),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual([call[1] for call in runtime.calls], ["literal\\\\"])
+
     def test_repl_checkpoints_after_each_completed_turn(self) -> None:
         runtime = RecordingRuntime(
             [
@@ -469,11 +519,16 @@ class ReplTests(unittest.TestCase):
         )
         input_stream = InteractiveStringIO()
         output_stream = InteractiveStringIO()
+        readline = Mock()
 
         with (
+            patch.object(cli, "_readline", readline),
             patch.object(cli.sys, "stdin", input_stream),
             patch.object(cli.sys, "stdout", output_stream),
-            patch("builtins.input", side_effect=["edited question", "/exit"]) as terminal_input,
+            patch(
+                "builtins.input",
+                side_effect=["edited\r\nquestion", "/exit"],
+            ) as terminal_input,
         ):
             exit_code = run_repl(
                 runtime,
@@ -483,11 +538,35 @@ class ReplTests(unittest.TestCase):
             )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual([call[1] for call in runtime.calls], ["edited question"])
+        self.assertEqual([call[1] for call in runtime.calls], ["edited\nquestion"])
+        readline.parse_and_bind.assert_called_once_with(
+            "set enable-bracketed-paste on"
+        )
         self.assertEqual(
             [call.args[0] for call in terminal_input.call_args_list],
             ["> ", "> "],
         )
+
+    def test_empty_terminal_line_is_not_treated_as_eof(self) -> None:
+        runtime = RecordingRuntime([])
+        input_stream = InteractiveStringIO()
+        output_stream = InteractiveStringIO()
+
+        with (
+            patch.object(cli.sys, "stdin", input_stream),
+            patch.object(cli.sys, "stdout", output_stream),
+            patch("builtins.input", side_effect=["", "/exit"]) as terminal_input,
+        ):
+            exit_code = run_repl(
+                runtime,
+                self.state,
+                input_stream=input_stream,
+                output_stream=output_stream,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(runtime.calls, [])
+        self.assertEqual(terminal_input.call_count, 2)
 
     def test_terminal_eof_uses_normal_repl_exit(self) -> None:
         runtime = RecordingRuntime([])
