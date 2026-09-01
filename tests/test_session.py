@@ -188,6 +188,7 @@ class SessionStateTests(unittest.TestCase):
         state = SessionState.create("session-1", "/tmp")
 
         self.assertTrue(state.system_prompt)
+        self.assertIn("Shell commands start in the workspace root.", state.system_prompt)
         self.assertEqual(state.workspace_root, "/tmp")
 
 
