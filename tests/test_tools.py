@@ -207,6 +207,25 @@ class ReadOnlyToolTests(unittest.TestCase):
         self.assertLessEqual(artifact.stat().st_size, 1000)
         self.assertTrue(result.metadata["artifact_incomplete"])
 
+    def test_artifact_store_accepts_an_existing_session_directory(self) -> None:
+        session_directory = self.root / "sessions" / "2024" / "02" / "03" / "session-1"
+        store = ArtifactStore("session-1", session_directory=session_directory)
+
+        artifact = store.write("call-1", "full output")
+
+        self.assertEqual(store.root, session_directory / "tool-results")
+        self.assertEqual(artifact.path.parent, session_directory / "tool-results")
+
+    def test_artifact_store_rejects_ambiguous_or_mismatched_directories(self) -> None:
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            ArtifactStore(
+                "session-1",
+                state_home=self.root,
+                session_directory=self.root / "session-1",
+            )
+        with self.assertRaisesRegex(ValueError, "end with the session_id"):
+            ArtifactStore("session-1", session_directory=self.root / "another-session")
+
     def test_grep_command_is_used_when_ripgrep_is_missing(self) -> None:
         grep = shutil.which("grep")
         self.assertIsNotNone(grep)

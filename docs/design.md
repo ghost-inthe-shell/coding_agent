@@ -23,9 +23,10 @@ one-shot 模式、TUI 或 REPL 内会话切换。
   内存中的历史。
 - `--resume SESSION_ID` 只恢复显式指定的会话，使用其中保存的 workspace，并与
   `--workspace` 互斥。不提供 latest、会话列表或 REPL 内切换。
-- checkpoint 保存到
-  `${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/<session-id>/session.json`，采用同目录
-  临时文件、`fsync` 和原子替换；会话目录权限为 `0700`，JSON 文件为 `0600`。
+- 新 checkpoint 按不可变的会话创建时间对应的本地日期保存到
+  `${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/YYYY/MM/DD/<session-id>/session.json`，采用
+  同目录临时文件、`fsync` 和原子替换；日期与会话目录权限为 `0700`，JSON 文件为 `0600`。
+  已存在的旧版平铺 checkpoint 可继续恢复并原地保存，不做隐式迁移。
 - workspace 内成功的 `read_file` 将规范相对路径及 `mtime_ns`、大小和全文件 SHA-256
   登记到 `SessionState.read_file_versions`。不保存文件正文；artifact 与 workspace 外读取不登记。
 - `prompts/system.md` 是可编辑的 system prompt 源文件。创建会话时把解析后的文本保存到
@@ -127,8 +128,9 @@ finished、turn finished。不实现 EventBus 或通用 hook 框架。
 替代，完整输出保存到：
 
 ```text
-${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/<session-id>/tool-results/
+${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/YYYY/MM/DD/<session-id>/tool-results/
 ```
 
 `read_file` 和 `grep_search` 可以自动读取当前 session 的 artifact。单次捕获与单个 artifact
-采用全局 10 MiB 硬上限；达到上限后停止继续捕获，并把 artifact 标记为不完整。
+采用全局 10 MiB 硬上限；达到上限后停止继续捕获，并把 artifact 标记为不完整。artifact 始终
+跟随已解析的 checkpoint 目录，因此恢复旧版平铺会话时也继续写在旧目录内。

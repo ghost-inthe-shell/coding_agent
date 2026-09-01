@@ -50,6 +50,7 @@ from .events import (
 from .messages import AssistantMessage, UserMessage
 from .results import CompactionResult, RunResult, ToolResult
 from .session import SessionState
+from .session_store import SessionStore
 from .types import RunStatus, SessionStatus, StopReason
 from .usage import Usage
 
@@ -192,7 +193,11 @@ class Runtime:
         state.touch()
         self._emit(TurnStarted(state.session_id))
 
-        artifact_store = ArtifactStore(state.session_id, state_home=self._state_home)
+        session_directory = SessionStore(state_home=self._state_home).path_for_state(state).parent
+        artifact_store = ArtifactStore(
+            state.session_id,
+            session_directory=session_directory,
+        )
         executor = ToolExecutor(self._tools, ToolResultProcessor(artifact_store))
         context = ToolContext(
             session_id=state.session_id,

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
 from hashlib import sha256
-import os
 from pathlib import Path
-import re
-
 
 DEFAULT_MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
 
@@ -20,13 +19,27 @@ class ArtifactRecord:
 
 
 class ArtifactStore:
-    def __init__(self, session_id: str, *, state_home: Path | None = None) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        *,
+        state_home: Path | None = None,
+        session_directory: Path | None = None,
+    ) -> None:
         if not session_id:
             raise ValueError("session_id must not be empty")
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", session_id) or session_id in {".", ".."}:
             raise ValueError("session_id contains unsafe path characters")
-        base = state_home or _default_state_home()
-        self.root = (base / "coding-agent" / "sessions" / session_id / "tool-results").resolve()
+        if state_home is not None and session_directory is not None:
+            raise ValueError("state_home and session_directory are mutually exclusive")
+        if session_directory is not None:
+            directory = session_directory.expanduser()
+            if directory.name != session_id:
+                raise ValueError("session_directory must end with the session_id")
+        else:
+            base = state_home or _default_state_home()
+            directory = base / "coding-agent" / "sessions" / session_id
+        self.root = (directory / "tool-results").resolve()
 
     def write(
         self,

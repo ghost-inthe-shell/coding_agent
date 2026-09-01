@@ -24,6 +24,7 @@ from coding_agent.core.messages import (
 from coding_agent.core.results import ToolResult
 from coding_agent.core.runtime import Runtime, RuntimeLimits
 from coding_agent.core.session import SessionState
+from coding_agent.core.session_store import SessionStore
 from coding_agent.core.types import (
     RunStatus,
     SessionStatus,
@@ -162,6 +163,32 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(tool.permission_handlers, [permission_handler])
         state.validate()
         self.assertIsInstance(events[-1], TurnFinished)
+
+    def test_runtime_stores_large_tool_output_beside_the_dated_checkpoint(self) -> None:
+        provider = SequenceProvider(
+            [
+                tool_message(
+                    ToolCall(id="large-call", name="echo", arguments={"text": "x" * 50_001})
+                ),
+                text_message("done"),
+            ]
+        )
+        state = self.state()
+
+        result = Runtime(
+            provider,
+            (EchoTool(),),
+            state_home=self.root,
+        ).run_turn(state, "produce a large result")
+
+        self.assertEqual(result.status, RunStatus.COMPLETED)
+        tool_result = next(
+            message for message in state.messages if isinstance(message, ToolResultMessage)
+        )
+        artifact_path = Path(tool_result.metadata["artifact_path"])
+        session_directory = SessionStore(state_home=self.root).path_for_state(state).parent
+        self.assertEqual(artifact_path.parent, session_directory / "tool-results")
+        self.assertTrue(artifact_path.is_file())
 
     def test_runtime_forwards_completion_deltas_without_persisting_them(self) -> None:
         provider = SequenceProvider(

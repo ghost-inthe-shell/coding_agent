@@ -137,9 +137,10 @@ coding-agent \
   --resume <session-id>
 ```
 
-会话在创建时及每轮结束后保存到
-`${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/<session-id>/session.json`。保存失败会立即
-终止 REPL，防止后续消息建立在未持久化的历史上。
+会话在创建时及每轮结束后，按会话创建时的本地日期保存到
+`${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/YYYY/MM/DD/<session-id>/session.json`。
+旧版的 `sessions/<session-id>/session.json` 仍可恢复，并继续原地保存，不会被自动迁移。保存失败
+会立即终止 REPL，防止后续消息建立在未持久化的历史上。
 
 也可不激活虚拟环境，直接使用其中的可执行文件：
 
