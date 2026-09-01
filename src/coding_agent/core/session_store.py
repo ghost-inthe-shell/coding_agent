@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 from collections.abc import Mapping
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from .session import SessionState
@@ -36,15 +37,28 @@ class SessionStore:
         base = state_home if state_home is not None else _default_state_home()
         self.root = base.expanduser() / "coding-agent" / "sessions"
 
-    def path_for(self, session_id: str) -> Path:
+    def path_for(self, session_id: str, *, created_at: int | None = None) -> Path:
         _validate_session_id(session_id)
+        existing = _find_session_paths(self.root, session_id)
+        if len(existing) > 1:
+            raise ValueError(f"multiple checkpoints found for session {session_id!r}")
+        if existing:
+            return existing[0]
+        if created_at is not None:
+            year, month, day = _session_date_parts(created_at)
+            return self.root / year / month / day / session_id / "session.json"
         return self.root / session_id / "session.json"
+
+    def path_for_state(self, state: SessionState) -> Path:
+        """Resolve the stable checkpoint path for an existing or new state."""
+
+        return self.path_for(state.session_id, created_at=state.created_at)
 
     def save(self, state: SessionState) -> Path:
         """Atomically replace the checkpoint for a stable SessionState."""
 
         try:
-            path = self.path_for(state.session_id)
+            path = self.path_for_state(state)
             _validate_stable_state(state)
             encoded = (
                 json.dumps(
@@ -62,7 +76,7 @@ class SessionStore:
         try:
             _make_private_directory(self.root.parent)
             _make_private_directory(self.root)
-            _make_private_directory(path.parent)
+            _make_private_tree(self.root, path.parent)
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8",
@@ -143,9 +157,56 @@ def _validate_stable_state(state: SessionState) -> None:
     state.validate()
 
 
+def _session_date_parts(created_at: int) -> tuple[str, str, str]:
+    if not isinstance(created_at, int) or isinstance(created_at, bool):
+        raise TypeError("created_at must be an integer timestamp")
+    try:
+        created = datetime.fromtimestamp(created_at / 1000, timezone.utc).astimezone()
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError("created_at is outside the supported timestamp range") from exc
+    return f"{created.year:04d}", f"{created.month:02d}", f"{created.day:02d}"
+
+
+def _find_session_paths(root: Path, session_id: str) -> list[Path]:
+    candidates: list[Path] = []
+    legacy = root / session_id / "session.json"
+    if legacy.is_file():
+        candidates.append(legacy)
+    if not root.is_dir():
+        return candidates
+    for candidate in root.glob(f"*/*/*/{session_id}/session.json"):
+        try:
+            year, month, day, found_id, filename = candidate.relative_to(root).parts
+            date(int(year), int(month), int(day))
+        except (TypeError, ValueError):
+            continue
+        if (
+            not re.fullmatch(r"\d{4}", year)
+            or not re.fullmatch(r"\d{2}", month)
+            or not re.fullmatch(r"\d{2}", day)
+            or found_id != session_id
+            or filename != "session.json"
+            or not candidate.is_file()
+        ):
+            continue
+        candidates.append(candidate)
+    return sorted(candidates)
+
+
 def _make_private_directory(path: Path) -> None:
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(path, 0o700)
+
+
+def _make_private_tree(root: Path, leaf: Path) -> None:
+    try:
+        relative = leaf.relative_to(root)
+    except ValueError as exc:  # pragma: no cover - constructed internally
+        raise OSError(f"session directory escaped storage root: {leaf}") from exc
+    current = root
+    for part in relative.parts:
+        current /= part
+        _make_private_directory(current)
 
 
 def _fsync_directory(path: Path) -> None:

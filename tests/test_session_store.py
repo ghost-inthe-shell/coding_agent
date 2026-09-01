@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,7 +27,7 @@ class SessionStoreTests(unittest.TestCase):
             workspace_root="/tmp/workspace",
             system_prompt="Be useful.",
             status=SessionStatus.IDLE,
-            created_at=1,
+            created_at=int(datetime(2024, 2, 3, 4, 0, tzinfo=timezone.utc).timestamp() * 1000),
             updated_at=2,
         )
 
@@ -38,11 +39,54 @@ class SessionStoreTests(unittest.TestCase):
 
         self.assertEqual(
             path,
-            self.state_home / "coding-agent" / "sessions" / "session-1" / "session.json",
+            self.state_home
+            / "coding-agent"
+            / "sessions"
+            / "2024"
+            / "02"
+            / "03"
+            / "session-1"
+            / "session.json",
         )
         self.assertEqual(self.store.load("session-1"), self.state)
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+        for directory in (
+            path.parent.parent,
+            path.parent.parent.parent,
+            path.parent.parent.parent.parent,
+        ):
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+
+    def test_existing_legacy_layout_is_loaded_and_saved_in_place(self) -> None:
+        legacy_path = self.store.path_for("session-1")
+        legacy_path.parent.mkdir(parents=True)
+        legacy_path.write_text(
+            json.dumps(self.state.to_dict()),
+            encoding="utf-8",
+        )
+
+        loaded = self.store.load("session-1")
+        saved_path = self.store.save(loaded)
+
+        self.assertEqual(loaded, self.state)
+        self.assertEqual(saved_path, legacy_path)
+        self.assertFalse((self.store.root / "2024").exists())
+
+    def test_duplicate_legacy_and_dated_checkpoints_are_rejected(self) -> None:
+        dated_path = self.store.save(self.state)
+        legacy_path = self.store.root / "session-1" / "session.json"
+        legacy_path.parent.mkdir(parents=True)
+        legacy_path.write_text(dated_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+        with self.assertRaisesRegex(InvalidSessionError, "multiple checkpoints"):
+            self.store.load("session-1")
+
+    def test_save_rejects_created_at_outside_datetime_range(self) -> None:
+        self.state.created_at = 10**30
+
+        with self.assertRaisesRegex(InvalidSessionError, "supported timestamp range"):
+            self.store.save(self.state)
 
     def test_atomic_failure_preserves_previous_checkpoint_and_removes_temp_file(self) -> None:
         path = self.store.save(self.state)
