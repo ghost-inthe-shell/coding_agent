@@ -1,6 +1,7 @@
 """Provider boundary consumed by the agent runtime."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from coding_agent.core.messages import AssistantMessage, Message
@@ -9,6 +10,28 @@ from coding_agent.tools.base import ToolSpec
 from .reasoning import ReasoningLevel
 
 DEFAULT_MAX_OUTPUT_TOKENS = 16_384
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionTextDelta:
+    text: str
+
+    def __post_init__(self) -> None:
+        if not self.text:
+            raise ValueError("completion text delta must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionThinkingDelta:
+    thinking: str
+
+    def __post_init__(self) -> None:
+        if not self.thinking:
+            raise ValueError("completion thinking delta must not be empty")
+
+
+CompletionEvent = CompletionTextDelta | CompletionThinkingDelta
+CompletionEventSink = Callable[[CompletionEvent], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,5 +61,10 @@ class LLMProvider(ABC):
         return None
 
     @abstractmethod
-    def complete(self, request: CompletionRequest) -> AssistantMessage:
+    def complete(
+        self,
+        request: CompletionRequest,
+        *,
+        event_sink: CompletionEventSink | None = None,
+    ) -> AssistantMessage:
         """Return one normalized assistant message."""

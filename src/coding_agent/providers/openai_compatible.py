@@ -19,7 +19,13 @@ from coding_agent.core.types import StopReason
 from coding_agent.core.usage import Usage
 from coding_agent.tools.base import ToolSpec
 
-from .base import DEFAULT_MAX_OUTPUT_TOKENS, CompletionRequest, LLMProvider, ProviderError
+from .base import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    CompletionEventSink,
+    CompletionRequest,
+    LLMProvider,
+    ProviderError,
+)
 from .reasoning import ApiDialect, ReasoningLevel
 
 _REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_text")
@@ -67,7 +73,12 @@ class OpenAICompatibleProvider(LLMProvider):
     def max_output_tokens(self) -> int:
         return self.max_tokens
 
-    def complete(self, request: CompletionRequest) -> AssistantMessage:
+    def complete(
+        self,
+        request: CompletionRequest,
+        *,
+        event_sink: CompletionEventSink | None = None,
+    ) -> AssistantMessage:
         arguments: dict[str, Any] = {
             "model": self.model,
             "messages": _convert_messages(request),

@@ -6,7 +6,14 @@ from pathlib import Path
 from pydantic import Field
 
 from coding_agent.core.compaction import CompactionCheckpoint
-from coding_agent.core.events import ModelRequested, TurnFinished
+from coding_agent.core.events import (
+    ModelRequested,
+    ModelResponded,
+    ModelTextDelta,
+    ModelThinkingDelta,
+    TurnFinished,
+    TurnStarted,
+)
 from coding_agent.core.messages import (
     AssistantMessage,
     TextBlock,
@@ -26,7 +33,10 @@ from coding_agent.core.types import (
 from coding_agent.core.usage import Usage
 from coding_agent.permissions import PermissionDecision, PermissionRequest
 from coding_agent.providers import (
+    CompletionEventSink,
     CompletionRequest,
+    CompletionTextDelta,
+    CompletionThinkingDelta,
     LLMProvider,
     ProviderError,
     ReasoningLevel,
@@ -54,17 +64,33 @@ class EchoTool(Tool[EchoInput]):
 
 
 class SequenceProvider(LLMProvider):
-    def __init__(self, messages, *, max_output_tokens=2048):
+    def __init__(
+        self,
+        messages,
+        *,
+        max_output_tokens=2048,
+        completion_events=(),
+    ):
         self.messages = deque(messages)
         self.requests: list[CompletionRequest] = []
         self._max_output_tokens = max_output_tokens
+        self.completion_events = deque(completion_events)
 
     @property
     def max_output_tokens(self) -> int | None:
         return self._max_output_tokens
 
-    def complete(self, request: CompletionRequest) -> AssistantMessage:
+    def complete(
+        self,
+        request: CompletionRequest,
+        *,
+        event_sink: CompletionEventSink | None = None,
+    ) -> AssistantMessage:
         self.requests.append(request)
+        events = self.completion_events.popleft() if self.completion_events else ()
+        if event_sink is not None:
+            for event in events:
+                event_sink(event)
         return self.messages.popleft()
 
 
@@ -137,6 +163,45 @@ class RuntimeTests(unittest.TestCase):
         state.validate()
         self.assertIsInstance(events[-1], TurnFinished)
 
+    def test_runtime_forwards_completion_deltas_without_persisting_them(self) -> None:
+        provider = SequenceProvider(
+            [text_message("hello")],
+            completion_events=[
+                (
+                    CompletionThinkingDelta("plan"),
+                    CompletionTextDelta("hel"),
+                    CompletionTextDelta("lo"),
+                )
+            ],
+        )
+        events = []
+        state = self.state()
+
+        result = Runtime(
+            provider,
+            (),
+            event_sink=events.append,
+            state_home=self.root,
+        ).run_turn(state, "work")
+
+        self.assertEqual(result.final_text, "hello")
+        self.assertEqual(
+            [type(event) for event in events],
+            [
+                TurnStarted,
+                ModelRequested,
+                ModelThinkingDelta,
+                ModelTextDelta,
+                ModelTextDelta,
+                ModelResponded,
+                TurnFinished,
+            ],
+        )
+        self.assertEqual(events[2].thinking, "plan")
+        self.assertEqual([events[3].text, events[4].text], ["hel", "lo"])
+        self.assertEqual(len(state.messages), 2)
+        self.assertEqual(state.messages[-1].text, "hello")
+
     def test_tool_budget_pairs_skipped_calls_then_requests_final_text(self) -> None:
         provider = SequenceProvider(
             [
@@ -169,7 +234,12 @@ class RuntimeTests(unittest.TestCase):
 
     def test_expected_provider_error_returns_failed_run(self) -> None:
         class FailingProvider(LLMProvider):
-            def complete(self, request: CompletionRequest) -> AssistantMessage:
+            def complete(
+                self,
+                request: CompletionRequest,
+                *,
+                event_sink: CompletionEventSink | None = None,
+            ) -> AssistantMessage:
                 raise ProviderError("offline")
 
         result = Runtime(FailingProvider(), (), state_home=self.root).run_turn(self.state(), "work")

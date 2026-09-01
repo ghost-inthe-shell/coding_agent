@@ -22,7 +22,11 @@ from coding_agent.permissions import PermissionHandler
 from coding_agent.prompts import load_compaction_prompt
 from coding_agent.providers import (
     DEFAULT_MAX_OUTPUT_TOKENS,
+    CompletionEvent,
+    CompletionEventSink,
     CompletionRequest,
+    CompletionTextDelta,
+    CompletionThinkingDelta,
     LLMProvider,
     ProviderError,
     ReasoningLevel,
@@ -35,6 +39,8 @@ from .events import (
     EventSink,
     ModelRequested,
     ModelResponded,
+    ModelTextDelta,
+    ModelThinkingDelta,
     RuntimeEvent,
     ToolFinished,
     ToolStarted,
@@ -410,10 +416,31 @@ class Runtime:
                 system_prompt=system_prompt,
                 messages=active_messages(state),
                 tools=tools,
-            )
+            ),
+            event_sink=self._completion_event_sink(state.session_id, model_call),
         )
         self._emit(ModelResponded(state.session_id, model_call, message))
         return message
+
+    def _completion_event_sink(
+        self,
+        session_id: str,
+        model_call: int,
+    ) -> CompletionEventSink | None:
+        if self._event_sink is None:
+            return None
+
+        def forward(event: CompletionEvent) -> None:
+            if isinstance(event, CompletionTextDelta):
+                self._emit(ModelTextDelta(session_id, model_call, event.text))
+            elif isinstance(event, CompletionThinkingDelta):
+                self._emit(
+                    ModelThinkingDelta(session_id, model_call, event.thinking)
+                )
+            else:  # pragma: no cover - closed by the CompletionEvent union
+                raise TypeError(f"unsupported completion event: {event!r}")
+
+        return forward
 
     def _auto_compact(
         self,

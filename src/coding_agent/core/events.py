@@ -1,9 +1,9 @@
-"""The six synchronous events emitted by one runtime turn."""
+"""Synchronous events emitted by one runtime turn."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Union
 
 from .messages import AssistantMessage, ToolCall, ToolResultMessage, timestamp_ms
 from .results import RunResult
@@ -19,6 +19,22 @@ class TurnStarted:
 class ModelRequested:
     session_id: str
     model_call: int
+    timestamp: int = field(default_factory=timestamp_ms)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelTextDelta:
+    session_id: str
+    model_call: int
+    text: str
+    timestamp: int = field(default_factory=timestamp_ms)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelThinkingDelta:
+    session_id: str
+    model_call: int
+    thinking: str
     timestamp: int = field(default_factory=timestamp_ms)
 
 
@@ -51,12 +67,14 @@ class TurnFinished:
     timestamp: int = field(default_factory=timestamp_ms)
 
 
-RuntimeEvent = Union[
-    TurnStarted,
-    ModelRequested,
-    ModelResponded,
-    ToolStarted,
-    ToolFinished,
-    TurnFinished,
-]
+RuntimeEvent = (
+    TurnStarted
+    | ModelRequested
+    | ModelTextDelta
+    | ModelThinkingDelta
+    | ModelResponded
+    | ToolStarted
+    | ToolFinished
+    | TurnFinished
+)
 EventSink = Callable[[RuntimeEvent], None]

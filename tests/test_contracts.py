@@ -7,6 +7,8 @@ from pydantic import Field
 from coding_agent.core.events import (
     ModelRequested,
     ModelResponded,
+    ModelTextDelta,
+    ModelThinkingDelta,
     ToolFinished,
     ToolStarted,
     TurnFinished,
@@ -15,7 +17,14 @@ from coding_agent.core.events import (
 from coding_agent.core.messages import AssistantMessage, TextBlock, ToolCall, UserMessage
 from coding_agent.core.results import ToolResult
 from coding_agent.core.types import StopReason, ToolResultStatus
-from coding_agent.providers import CompletionRequest, LLMProvider, ReasoningLevel
+from coding_agent.providers import (
+    CompletionEventSink,
+    CompletionRequest,
+    CompletionTextDelta,
+    CompletionThinkingDelta,
+    LLMProvider,
+    ReasoningLevel,
+)
 from coding_agent.tools import (
     ArtifactStore,
     Tool,
@@ -40,7 +49,12 @@ class EchoTool(Tool[EchoInput]):
 
 
 class FakeProvider(LLMProvider):
-    def complete(self, request: CompletionRequest) -> AssistantMessage:
+    def complete(
+        self,
+        request: CompletionRequest,
+        *,
+        event_sink: CompletionEventSink | None = None,
+    ) -> AssistantMessage:
         return AssistantMessage(
             content=(TextBlock(f"received {len(request.messages)} message(s)"),),
             provider="fake",
@@ -99,16 +113,24 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(result.status, ToolResultStatus.ERROR)
         self.assertIn("extra_forbidden", result.content)
 
-    def test_runtime_event_protocol_has_exactly_six_types(self) -> None:
+    def test_completion_deltas_reject_empty_content(self) -> None:
+        with self.assertRaises(ValueError):
+            CompletionTextDelta("")
+        with self.assertRaises(ValueError):
+            CompletionThinkingDelta("")
+
+    def test_runtime_event_protocol_has_exactly_eight_types(self) -> None:
         event_types = {
             TurnStarted,
             ModelRequested,
+            ModelTextDelta,
+            ModelThinkingDelta,
             ModelResponded,
             ToolStarted,
             ToolFinished,
             TurnFinished,
         }
-        self.assertEqual(len(event_types), 6)
+        self.assertEqual(len(event_types), 8)
 
 
 if __name__ == "__main__":

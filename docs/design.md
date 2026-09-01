@@ -11,7 +11,8 @@ diff，也不使用 LLM judge。无人值守评测必须在一次性容器内运
 交互客户端直接采用同步 REPL，并在同一个 `SessionState` 上执行多轮对话。第一版提供 help、
 compact 和 exit 命令，Linux 交互 TTY 使用 Python 标准库 GNU readline 编辑，并显式启用
 bracketed paste。普通 Enter 提交；奇数个行尾反斜杠表示移除最后一个反斜杠并继续收集下一行，
-从而在同一条用户消息中插入换行。不实现 one-shot 模式、TUI、流式输出或 REPL 内会话切换。
+从而在同一条用户消息中插入换行。终端展示使用标准库 ANSI Renderer 和同步流式输出；不实现
+one-shot 模式、TUI 或 REPL 内会话切换。
 
 ## 核心边界
 
@@ -29,8 +30,9 @@ bracketed paste。普通 Enter 提交；奇数个行尾反斜杠表示移除最�
   登记到 `SessionState.read_file_versions`。不保存文件正文；artifact 与 workspace 外读取不登记。
 - `prompts/system.md` 是可编辑的 system prompt 源文件。创建会话时把解析后的文本保存到
   `SessionState.system_prompt`；恢复旧会话时继续使用原快照。
-- Provider 接收标准消息与工具 schema，直接返回标准化 `AssistantMessage`。厂商特有响应
-  对象不得进入 SessionState。
+- Provider 接收标准消息与工具 schema，直接返回标准化 `AssistantMessage`。同步请求可以额外
+  发出 text/thinking delta 供即时展示，但 delta 不进入 `SessionState`；厂商特有响应对象也
+  不得进入会话状态。
 - OpenAI-compatible 传输与厂商 thinking 扩展分离。启动时显式选择 `generic`、`deepseek`、
   `dashscope` 或 `moonshot` API dialect；不根据模型名或 URL 猜测。Runtime 只表达
   `default/off/low/medium/high/max/minimal` 推理意图，由 Provider 映射为厂商字段。不支持的
@@ -75,9 +77,9 @@ tools 下满足 `tokens_after < tokens_before` 才能生效；否则保留旧 ch
 若模型因输出 token 限制停止，纯文本作为部分结果以 `limit_reached` 结束；若响应包含 tool
 calls，Runtime 不执行整批调用，而是逐个生成配对错误结果，并在模型调用预算允许时继续循环。
 
-Runtime 只提供一个可选的同步事件接收函数，并且只有六种强类型事件：turn started、model
-requested、model responded、tool started、tool finished、turn finished。不实现 EventBus 或
-通用 hook 框架。
+Runtime 只提供一个可选的同步事件接收函数，并且只有八种强类型事件：turn started、model
+requested、model text delta、model thinking delta、model responded、tool started、tool
+finished、turn finished。不实现 EventBus 或通用 hook 框架。
 
 预期内的 Provider 失败、非法工具入参、路径拒绝和普通工具 I/O 失败转换为明确结果。未预期
 的程序或协议错误会停止 Runtime，不得伪装成普通工具输出。
