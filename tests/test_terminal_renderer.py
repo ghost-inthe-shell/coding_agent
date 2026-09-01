@@ -104,8 +104,9 @@ class TerminalRendererTests(unittest.TestCase):
         renderer.assistant("answer")
 
         self.assertTrue(renderer.color_enabled)
-        self.assertIn("\x1b[32m", output.getvalue())
-        self.assertIn("assistant>\x1b[0m \x1b[32manswer", output.getvalue())
+        self.assertIn("\x1b[34m", output.getvalue())
+        self.assertIn("assistant>\x1b[0m answer", output.getvalue())
+        self.assertNotIn("\x1b[32manswer", output.getvalue())
 
     def test_no_color_environment_disables_auto_color(self) -> None:
         output = TTYStringIO()

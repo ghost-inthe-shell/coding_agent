@@ -35,6 +35,7 @@ _DIM = "\x1b[2m"
 _RED = "\x1b[31m"
 _GREEN = "\x1b[32m"
 _YELLOW = "\x1b[33m"
+_BLUE = "\x1b[34m"
 _CYAN = "\x1b[36m"
 
 
@@ -71,7 +72,7 @@ class TerminalRenderer:
         elif isinstance(event, ModelTextDelta):
             self._start_channel("assistant")
             self._current_response_streamed_text = True
-            self.write(self._style(event.text, _GREEN))
+            self.write(event.text)
         elif isinstance(event, ModelResponded):
             self._finish_channel()
             self._last_response_streamed_text = self._current_response_streamed_text
@@ -84,8 +85,8 @@ class TerminalRenderer:
                 separators=(",", ":"),
             )
             label = self._style("tool>", _BOLD, _CYAN)
-            name = self._style(event.call.name, _YELLOW)
-            self.write(f"{label} {name} {arguments}\n")
+            name = self._style(event.call.name, _BOLD)
+            self.write(f"{label} {name} {self._style(arguments, _DIM)}\n")
         elif isinstance(event, ToolFinished):
             self._finish_channel()
             name = self._tool_names.pop(
@@ -118,8 +119,8 @@ class TerminalRenderer:
 
     def assistant(self, text: str) -> None:
         if text:
-            label = self._style("assistant>", _BOLD, _GREEN)
-            self.write(f"{label} {self._style(text, _GREEN)}\n")
+            label = self._style("assistant>", _BOLD, _BLUE)
+            self.write(f"{label} {text}\n")
 
     def run_result(self, result: RunResult) -> None:
         self._finish_channel()
@@ -191,9 +192,9 @@ class TerminalRenderer:
             return
         self._finish_channel()
         if channel == "thinking":
-            label = self._style("thinking>", _DIM, _YELLOW)
+            label = self._style("thinking>", _DIM)
         else:
-            label = self._style("assistant>", _BOLD, _GREEN)
+            label = self._style("assistant>", _BOLD, _BLUE)
         self.write(f"{label} ")
         self._open_channel = channel
 
