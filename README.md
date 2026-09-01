@@ -194,6 +194,10 @@ REPL 内会话切换。文件写入和每条 Shell 命令也会逐次请求确�
 实现存在问题，可用 `--no-stream` 回退到完整响应；`--stream` 可显式开启默认行为。流中断时
 已经显示的片段不会写入 session，只有 Provider 成功组装的完整 `AssistantMessage` 才会持久化。
 
+`tool>` 使用按工具定制的短摘要，不显示 `write_file` 的文件正文或 `edit_file` 的替换文本；
+Shell 摘要最多取前两行、160 字符，并标注原命令长度。该限制只用于执行轨迹，逐次权限确认仍
+显示 JSON 转义后的完整命令，避免批准未展示的操作。
+
 模型每次调用默认最多生成 16,384 tokens，可通过 `--max-tokens` 调整；context window 默认
 按 128,000 tokens 估算，可用 `--context-window` 设置为实际模型值。历史接近安全阈值时会
 自动压缩，摘要调用复用当前 Provider/模型且不开放工具。

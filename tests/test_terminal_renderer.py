@@ -117,9 +117,54 @@ class TerminalRendererTests(unittest.TestCase):
 
         self.assertEqual(
             output.getvalue(),
-            'tool> read_file {"path":"README.md"}\ntool> read_file success\n',
+            'tool> read_file "README.md"\ntool> read_file success\n',
         )
         self.assertNotIn("secret", output.getvalue())
+
+    def test_shell_tool_summary_is_bounded_and_escapes_control_characters(self) -> None:
+        output = StringIO()
+        renderer = TerminalRenderer(output, color=ColorMode.NEVER)
+        command = "first\nsecond\n" + "x" * 300 + "\x1b[31msecret"
+        call = ToolCall(
+            id="call-shell",
+            name="run_shell",
+            arguments={"command": command, "timeout_seconds": 30},
+        )
+
+        renderer(ToolStarted("session-1", call))
+
+        rendered = output.getvalue()
+        self.assertIn("tool> run_shell $ first\\nsecond…", rendered)
+        self.assertIn(f"[{len(command)} chars]", rendered)
+        self.assertIn("(timeout=30s)", rendered)
+        self.assertNotIn("secret", rendered)
+        self.assertNotIn("\x1b[31m", rendered)
+
+    def test_write_and_edit_summaries_never_render_file_content(self) -> None:
+        output = StringIO()
+        renderer = TerminalRenderer(output, color=ColorMode.NEVER)
+        write = ToolCall(
+            id="call-write",
+            name="write_file",
+            arguments={"path": "new.py", "content": "private contents"},
+        )
+        edit = ToolCall(
+            id="call-edit",
+            name="edit_file",
+            arguments={
+                "path": "old.py",
+                "old_text": "private old",
+                "new_text": "private new",
+            },
+        )
+
+        renderer(ToolStarted("session-1", write))
+        renderer(ToolStarted("session-1", edit))
+
+        self.assertEqual(
+            output.getvalue(),
+            'tool> write_file "new.py"\ntool> edit_file "old.py"\n',
+        )
 
     def test_auto_color_is_plain_for_non_terminal_output(self) -> None:
         output = StringIO()

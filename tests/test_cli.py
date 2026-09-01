@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from io import StringIO
@@ -664,6 +665,20 @@ class InteractivePermissionHandlerTests(unittest.TestCase):
         self.assertIn(r"\u001b[31mred", rendered)
         self.assertIn(r"\nnext", rendered)
         self.assertNotIn("\x1b", rendered)
+
+    def test_execute_permission_keeps_the_complete_long_command(self) -> None:
+        output = StringIO()
+        handler = InteractivePermissionHandler(
+            input_stream=StringIO("n\n"),
+            output_stream=output,
+        )
+        command = "printf " + "x" * 300
+
+        decision = handler(PermissionRequest(PermissionOperation.EXECUTE, command))
+
+        self.assertEqual(decision, PermissionDecision.DENY)
+        self.assertIn(json.dumps(command), output.getvalue())
+        self.assertNotIn("chars]", output.getvalue())
 
 
 if __name__ == "__main__":

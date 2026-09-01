@@ -40,6 +40,8 @@ one-shot 模式、TUI 或 REPL 内会话切换。
 - thinking 展示与模型 reasoning 配置相互独立。Renderer 默认使用 `brief`，只显示活动提示和
   本次隐藏字符数；`full` 显示完整增量，`hidden` 不显示。三种模式都不改变标准消息、持久化或
   token usage。
+- Renderer 的工具轨迹使用按工具定制的有界摘要；Shell 摘要最多显示前两行、160 字符。展示
+  截断不改变工具参数，Shell 权限确认始终显示 JSON 转义后的完整命令。
 - OpenAI-compatible 传输与厂商 thinking 扩展分离。启动时显式选择 `generic`、`deepseek`、
   `dashscope` 或 `moonshot` API dialect；不根据模型名或 URL 猜测。Runtime 只表达
   `default/off/low/medium/high/max/minimal` 推理意图，由 Provider 映射为厂商字段。不支持的

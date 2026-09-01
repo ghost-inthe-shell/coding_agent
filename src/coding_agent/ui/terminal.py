@@ -19,6 +19,7 @@ from coding_agent.core.events import (
     TurnFinished,
     TurnStarted,
 )
+from coding_agent.core.messages import ToolCall
 from coding_agent.core.results import CompactionResult, RunResult
 from coding_agent.core.types import RunStatus
 
@@ -44,6 +45,9 @@ _GREEN = "\x1b[32m"
 _YELLOW = "\x1b[33m"
 _BLUE = "\x1b[34m"
 _CYAN = "\x1b[36m"
+_TOOL_SUMMARY_MAX_CHARS = 200
+_SHELL_PREVIEW_MAX_CHARS = 160
+_SHELL_PREVIEW_MAX_LINES = 2
 
 
 class TerminalRenderer:
@@ -90,14 +94,11 @@ class TerminalRenderer:
         elif isinstance(event, ToolStarted):
             self._finish_channel()
             self._tool_names[event.call.id] = event.call.name
-            arguments = json.dumps(
-                event.call.arguments,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
+            summary = _tool_summary(event.call)
             label = self._style("tool>", _BOLD, _CYAN)
             name = self._style(event.call.name, _BOLD)
-            self.write(f"{label} {name} {self._style(arguments, _DIM)}\n")
+            suffix = f" {self._style(summary, _DIM)}" if summary else ""
+            self.write(f"{label} {name}{suffix}\n")
         elif isinstance(event, ToolFinished):
             self._finish_channel()
             name = self._tool_names.pop(
@@ -253,3 +254,74 @@ def _color_enabled(
     if mode is ColorMode.NEVER or "NO_COLOR" in environment:
         return False
     return bool(getattr(output_stream, "isatty", lambda: False)())
+
+
+def _tool_summary(call: ToolCall) -> str:
+    arguments = call.arguments
+    if call.name == "run_shell" and isinstance(arguments.get("command"), str):
+        command = arguments["command"]
+        assert isinstance(command, str)
+        summary = f"$ {_shell_preview(command)}"
+        timeout = arguments.get("timeout_seconds")
+        if isinstance(timeout, int) and not isinstance(timeout, bool):
+            summary += f" (timeout={timeout}s)"
+        return summary
+
+    path = _quoted_string(arguments.get("path"))
+    if call.name == "read_file" and path is not None:
+        offset = arguments.get("offset")
+        limit = arguments.get("limit")
+        if (
+            isinstance(offset, int)
+            and not isinstance(offset, bool)
+            and isinstance(limit, int)
+            and not isinstance(limit, bool)
+        ):
+            return _bounded_summary(f"{path}:{offset}-{offset + limit - 1}")
+        return _bounded_summary(path)
+    if call.name == "glob_files":
+        return _pattern_summary(arguments, path)
+    if call.name == "grep_search":
+        summary = _pattern_summary(arguments, path)
+        glob = _quoted_string(arguments.get("glob"))
+        if glob is not None:
+            summary += f" glob={glob}"
+        return _bounded_summary(summary)
+    if call.name in {"write_file", "edit_file"} and path is not None:
+        return _bounded_summary(path)
+
+    serialized = json.dumps(
+        arguments,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return _bounded_summary(serialized)
+
+
+def _pattern_summary(arguments: dict[str, object], path: str | None) -> str:
+    pattern = _quoted_string(arguments.get("pattern"))
+    parts = [part for part in (pattern, f"in {path}" if path else None) if part]
+    return " ".join(parts)
+
+
+def _shell_preview(command: str) -> str:
+    lines = command.splitlines()
+    selected = "\n".join(lines[:_SHELL_PREVIEW_MAX_LINES])
+    escaped = json.dumps(selected, ensure_ascii=False)[1:-1]
+    truncated = selected != command or len(escaped) > _SHELL_PREVIEW_MAX_CHARS
+    preview = escaped[:_SHELL_PREVIEW_MAX_CHARS]
+    if truncated:
+        preview += f"… [{len(command)} chars]"
+    return preview
+
+
+def _quoted_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _bounded_summary(summary: str) -> str:
+    if len(summary) <= _TOOL_SUMMARY_MAX_CHARS:
+        return summary
+    return f"{summary[:_TOOL_SUMMARY_MAX_CHARS]}… [{len(summary)} chars]"
