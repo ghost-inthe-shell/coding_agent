@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import unicodedata
 from collections.abc import Mapping
 from enum import Enum
 from typing import TextIO
@@ -185,9 +186,28 @@ class TerminalRenderer:
         self.write(f"{label} {command}\n")
 
     def permission_request(self, question: str, label: str, target: str) -> None:
-        self.write(
-            f"{self._style(question, _YELLOW)}\n  {self._style(label + ':', _DIM)} {target}\n"
+        box_width = _permission_box_width(self.output_stream)
+        inner_width = box_width - 4
+        title = " Permission "
+        top = f"╭─{title}{'─' * (box_width - len(title) - 3)}╮"
+        bottom = f"╰{'─' * (box_width - 2)}╯"
+        lines = [self._style(top, _DIM, _YELLOW)]
+        for part in _wrap_display_text(question, inner_width):
+            lines.append(_box_line(part, self._style(part, _YELLOW), inner_width))
+        label_text = f"{label}:"
+        lines.append(
+            _box_line(
+                label_text,
+                self._style(label_text, _DIM),
+                inner_width,
+            )
         )
+        target_width = inner_width - 2
+        for part in _wrap_display_text(target, target_width):
+            plain = f"  {part}"
+            lines.append(_box_line(plain, plain, inner_width))
+        lines.append(self._style(bottom, _DIM, _YELLOW))
+        self.write("\n".join(lines) + "\n")
 
     def permission_decision(self, *, approved: bool) -> None:
         if approved:
@@ -325,3 +345,53 @@ def _bounded_summary(summary: str) -> str:
     if len(summary) <= _TOOL_SUMMARY_MAX_CHARS:
         return summary
     return f"{summary[:_TOOL_SUMMARY_MAX_CHARS]}… [{len(summary)} chars]"
+
+
+def _permission_box_width(output_stream: TextIO) -> int:
+    columns = 80
+    try:
+        if output_stream.isatty():
+            columns = os.get_terminal_size(output_stream.fileno()).columns
+    except (AttributeError, OSError):
+        pass
+    return max(24, min(columns, 100))
+
+
+def _box_line(plain: str, rendered: str, inner_width: int) -> str:
+    padding = " " * max(0, inner_width - _display_width(plain))
+    return f"│ {rendered}{padding} │"
+
+
+def _wrap_display_text(text: str, width: int) -> list[str]:
+    if not text:
+        return [""]
+    result: list[str] = []
+    current: list[str] = []
+    current_width = 0
+    for character in text:
+        if character == "\n":
+            result.append("".join(current))
+            current = []
+            current_width = 0
+            continue
+        character_width = _character_width(character)
+        if current and current_width + character_width > width:
+            result.append("".join(current))
+            current = []
+            current_width = 0
+        current.append(character)
+        current_width += character_width
+    result.append("".join(current))
+    return result
+
+
+def _display_width(text: str) -> int:
+    return sum(_character_width(character) for character in text)
+
+
+def _character_width(character: str) -> int:
+    if unicodedata.combining(character):
+        return 0
+    if unicodedata.east_asian_width(character) in {"W", "F"}:
+        return 2
+    return 1

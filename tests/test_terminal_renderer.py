@@ -264,6 +264,25 @@ class TerminalRendererTests(unittest.TestCase):
             "[compacted] summarized_messages=3, tokens_before=1200, tokens_after=450\n",
         )
 
+    def test_permission_request_uses_a_fixed_width_box_and_wraps_target(self) -> None:
+        output = StringIO()
+        renderer = TerminalRenderer(output, color=ColorMode.NEVER)
+
+        renderer.permission_request(
+            "Run this shell command in the workspace?",
+            "Command",
+            '"' + "x" * 100 + '"',
+        )
+
+        lines = output.getvalue().splitlines()
+        self.assertTrue(lines[0].startswith("╭─ Permission "))
+        self.assertTrue(lines[0].endswith("╮"))
+        self.assertEqual(len(lines[0]), 80)
+        self.assertTrue(lines[-1].startswith("╰"))
+        self.assertTrue(lines[-1].endswith("╯"))
+        self.assertGreater(len(lines), 5)
+        self.assertTrue(all(len(line) == 80 for line in lines))
+
 
 if __name__ == "__main__":
     unittest.main()

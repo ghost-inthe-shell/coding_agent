@@ -677,7 +677,14 @@ class InteractivePermissionHandlerTests(unittest.TestCase):
         decision = handler(PermissionRequest(PermissionOperation.EXECUTE, command))
 
         self.assertEqual(decision, PermissionDecision.DENY)
-        self.assertIn(json.dumps(command), output.getvalue())
+        lines = output.getvalue().splitlines()
+        command_index = next(index for index, line in enumerate(lines) if "Command:" in line)
+        target_lines = []
+        for line in lines[command_index + 1 :]:
+            if line.startswith("╰"):
+                break
+            target_lines.append(line[4:-2].rstrip())
+        self.assertEqual("".join(target_lines), json.dumps(command))
         self.assertNotIn("chars]", output.getvalue())
 
 
