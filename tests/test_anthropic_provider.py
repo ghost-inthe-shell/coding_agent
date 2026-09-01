@@ -14,6 +14,8 @@ from coding_agent.providers import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     AnthropicProvider,
     CompletionRequest,
+    CompletionTextDelta,
+    CompletionThinkingDelta,
     ProviderError,
     ReasoningLevel,
 )
@@ -58,7 +60,196 @@ def response(*, content=None, stop_reason="end_turn", stop_details=None):
     )
 
 
+def message_start():
+    return namespace(
+        type="message_start",
+        message=namespace(
+            id="message-stream-1",
+            model="actual-stream-model",
+            usage=namespace(
+                input_tokens=30,
+                output_tokens=1,
+                cache_read_input_tokens=7,
+                cache_creation_input_tokens=2,
+            ),
+        ),
+    )
+
+
+def block_start(index, block_type, **fields):
+    return namespace(
+        type="content_block_start",
+        index=index,
+        content_block=namespace(type=block_type, **fields),
+    )
+
+
+def block_delta(index, delta_type, **fields):
+    return namespace(
+        type="content_block_delta",
+        index=index,
+        delta=namespace(type=delta_type, **fields),
+    )
+
+
+def message_delta(stop_reason="end_turn"):
+    return namespace(
+        type="message_delta",
+        delta=namespace(stop_reason=stop_reason),
+        usage=namespace(output_tokens=12),
+    )
+
+
 class AnthropicProviderTests(unittest.TestCase):
+    def test_streams_thinking_and_text_then_returns_complete_message(self) -> None:
+        events = (
+            message_start(),
+            block_start(0, "thinking", thinking="", signature=""),
+            block_delta(0, "thinking_delta", thinking="inspect "),
+            block_delta(0, "thinking_delta", thinking="first"),
+            block_delta(0, "signature_delta", signature="opaque"),
+            namespace(type="content_block_stop", index=0),
+            block_start(1, "text", text=""),
+            block_delta(1, "text_delta", text="hel"),
+            block_delta(1, "text_delta", text="lo"),
+            namespace(type="content_block_stop", index=1),
+            message_delta(),
+            namespace(type="message_stop"),
+        )
+        messages = FakeMessages(events)
+        provider = AnthropicProvider(
+            "requested-model",
+            stream=True,
+            client=FakeClient(messages),
+        )
+        deltas = []
+
+        result = provider.complete(
+            CompletionRequest(messages=(), system_prompt="System"),
+            event_sink=deltas.append,
+        )
+
+        self.assertEqual(
+            deltas,
+            [
+                CompletionThinkingDelta("inspect "),
+                CompletionThinkingDelta("first"),
+                CompletionTextDelta("hel"),
+                CompletionTextDelta("lo"),
+            ],
+        )
+        self.assertEqual(result.thinking, "inspect first")
+        self.assertEqual(result.text, "hello")
+        self.assertEqual(result.response_id, "message-stream-1")
+        self.assertEqual(result.model, "actual-stream-model")
+        self.assertEqual(result.usage.input_tokens, 30)
+        self.assertEqual(result.usage.output_tokens, 12)
+        self.assertEqual(result.usage.cache_read_tokens, 7)
+        self.assertTrue(messages.arguments["stream"])
+
+    def test_stream_assembles_tool_input_without_emitting_partial_call(self) -> None:
+        events = (
+            message_start(),
+            block_start(0, "tool_use", id="call-1", name="read_file", input={}),
+            block_delta(0, "input_json_delta", partial_json='{"pa'),
+            block_delta(0, "input_json_delta", partial_json='th":"a.py"}'),
+            namespace(type="content_block_stop", index=0),
+            message_delta("tool_use"),
+            namespace(type="message_stop"),
+        )
+        messages = FakeMessages(events)
+        provider = AnthropicProvider("model", stream=True, client=FakeClient(messages))
+        deltas = []
+
+        result = provider.complete(
+            CompletionRequest(messages=(), system_prompt="System"),
+            event_sink=deltas.append,
+        )
+
+        self.assertEqual(deltas, [])
+        self.assertEqual(result.stop_reason, StopReason.TOOL_USE)
+        self.assertEqual(result.tool_calls[0].arguments, {"path": "a.py"})
+        self.assertEqual(result.tool_calls[0].raw_arguments, '{"path":"a.py"}')
+
+    def test_stream_preserves_truncated_tool_input(self) -> None:
+        events = (
+            message_start(),
+            block_start(0, "tool_use", id="call-1", name="read_file", input={}),
+            block_delta(0, "input_json_delta", partial_json='{"path":'),
+            message_delta("max_tokens"),
+            namespace(type="message_stop"),
+        )
+        provider = AnthropicProvider(
+            "model",
+            stream=True,
+            client=FakeClient(FakeMessages(events)),
+        )
+
+        result = provider.complete(
+            CompletionRequest(messages=(), system_prompt="System"),
+            event_sink=lambda event: None,
+        )
+
+        self.assertEqual(result.stop_reason, StopReason.LENGTH)
+        self.assertEqual(result.tool_calls[0].raw_arguments, '{"path":')
+        self.assertIsNotNone(result.tool_calls[0].parse_error)
+
+    def test_stream_error_is_reported_after_prior_display_delta(self) -> None:
+        events = (
+            message_start(),
+            block_start(0, "text", text=""),
+            block_delta(0, "text_delta", text="partial"),
+            namespace(
+                type="error",
+                error=namespace(type="overloaded_error", message="Overloaded"),
+            ),
+        )
+        provider = AnthropicProvider("model", stream=True, client=FakeClient(FakeMessages(events)))
+        deltas = []
+
+        with self.assertRaisesRegex(ProviderError, "Overloaded"):
+            provider.complete(
+                CompletionRequest(messages=(), system_prompt="System"),
+                event_sink=deltas.append,
+            )
+
+        self.assertEqual(deltas, [CompletionTextDelta("partial")])
+
+    def test_stream_configuration_requires_an_event_sink(self) -> None:
+        messages = FakeMessages(response())
+        provider = AnthropicProvider("model", stream=True, client=FakeClient(messages))
+
+        result = provider.complete(CompletionRequest(messages=(), system_prompt="System"))
+
+        self.assertEqual(result.text, "done")
+        self.assertFalse(messages.arguments["stream"])
+
+    def test_non_stream_response_preserves_thinking_as_non_replayed_content(self) -> None:
+        provider = AnthropicProvider(
+            "model",
+            client=FakeClient(
+                FakeMessages(
+                    response(
+                        content=(
+                            namespace(
+                                type="thinking",
+                                thinking="private",
+                                signature="opaque",
+                            ),
+                            namespace(type="text", text="answer"),
+                        )
+                    )
+                )
+            ),
+        )
+
+        result = provider.complete(CompletionRequest(messages=(), system_prompt="System"))
+
+        self.assertEqual(result.thinking, "private")
+        thinking = result.content[0]
+        assert isinstance(thinking, ThinkingBlock)
+        self.assertIsNone(thinking.replay_field)
+
     def test_groups_tool_results_and_converts_request(self) -> None:
         messages = FakeMessages(response())
         provider = AnthropicProvider("requested-model", client=FakeClient(messages))
@@ -169,6 +360,7 @@ class AnthropicProviderTests(unittest.TestCase):
                     reasoning=ReasoningLevel.HIGH,
                 )
             )
+
     def test_preserves_non_object_tool_input_as_parse_error(self) -> None:
         tool_use = namespace(type="tool_use", id="call-1", name="read_file", input="bad")
         provider = AnthropicProvider(
@@ -186,7 +378,9 @@ class AnthropicProviderTests(unittest.TestCase):
         tool_use = namespace(type="tool_use", id="call-1", name="read_file", input={})
         provider = AnthropicProvider(
             "model",
-            client=FakeClient(FakeMessages(response(content=(tool_use,), stop_reason="max_tokens"))),
+            client=FakeClient(
+                FakeMessages(response(content=(tool_use,), stop_reason="max_tokens"))
+            ),
         )
 
         result = provider.complete(CompletionRequest(messages=(), system_prompt="System"))
@@ -195,9 +389,7 @@ class AnthropicProviderTests(unittest.TestCase):
         self.assertEqual(result.tool_calls[0].id, "call-1")
 
     def test_request_can_use_a_smaller_output_limit(self) -> None:
-        messages = FakeMessages(
-            response(content=(namespace(type="text", text="summary"),))
-        )
+        messages = FakeMessages(response(content=(namespace(type="text", text="summary"),)))
         client = FakeClient(messages)
         provider = AnthropicProvider("test-model", client=client)
 
