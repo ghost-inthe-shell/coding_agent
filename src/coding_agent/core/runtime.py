@@ -47,11 +47,11 @@ from .events import (
     TurnFinished,
     TurnStarted,
 )
-from .messages import AssistantMessage, UserMessage
+from .messages import AssistantMessage, ToolCall, UserMessage
 from .results import CompactionResult, RunResult, ToolResult
 from .session import SessionState
 from .session_store import SessionStore
-from .types import RunStatus, SessionStatus, StopReason
+from .types import RunStatus, SessionStatus, StopReason, ToolResultStatus
 from .usage import Usage
 
 DEFAULT_MAX_MODEL_CALLS = 32
@@ -208,6 +208,8 @@ class Runtime:
             read_file_versions=state.read_file_versions,
         )
         progress = _TurnProgress()
+        pending_tool_calls: list[ToolCall] = []
+        active_tool_call: ToolCall | None = None
 
         try:
             while progress.model_calls < self._limits.max_model_calls:
@@ -224,6 +226,7 @@ class Runtime:
                 state.usage = state.usage + assistant.usage
                 state.messages.append(assistant)
                 state.touch()
+                pending_tool_calls = list(assistant.tool_calls)
                 state.validate(allow_pending_tool_calls=True)
 
                 if assistant.stop_reason is StopReason.ERROR:
@@ -265,6 +268,7 @@ class Runtime:
                         )
                         message = result.to_message(call)
                         state.messages.append(message)
+                        pending_tool_calls.pop(0)
                         state.touch()
                         self._emit(ToolFinished(state.session_id, message))
 
@@ -316,8 +320,9 @@ class Runtime:
                 for call in assistant.tool_calls:
                     self._emit(ToolStarted(state.session_id, call))
                     if progress.tool_calls < self._limits.max_tool_calls:
-                        result = executor.execute(call, context)
+                        active_tool_call = call
                         progress.tool_calls += 1
+                        result = executor.execute(call, context)
                     else:
                         budget_exhausted = True
                         result = ToolResult.error(
@@ -326,6 +331,8 @@ class Runtime:
                         )
                     message = result.to_message(call)
                     state.messages.append(message)
+                    pending_tool_calls.pop(0)
+                    active_tool_call = None
                     state.touch()
                     self._emit(ToolFinished(state.session_id, message))
 
@@ -388,6 +395,11 @@ class Runtime:
                 ),
             )
         except KeyboardInterrupt:
+            self._cancel_pending_tool_calls(
+                state,
+                pending_tool_calls,
+                active_tool_call=active_tool_call,
+            )
             return self._finish(
                 state,
                 RunResult(
@@ -572,6 +584,35 @@ class Runtime:
         state.validate()
         self._emit(TurnFinished(state.session_id, result))
         return result
+
+    def _cancel_pending_tool_calls(
+        self,
+        state: SessionState,
+        pending_calls: list[ToolCall],
+        *,
+        active_tool_call: ToolCall | None,
+    ) -> None:
+        for call in pending_calls:
+            if call is active_tool_call:
+                content = (
+                    "tool call interrupted by user; execution may have made partial changes"
+                )
+                metadata = {"reason": "interrupted_by_user"}
+            else:
+                content = "tool call not executed because the turn was interrupted"
+                metadata = {
+                    "not_executed": True,
+                    "reason": "turn_interrupted",
+                }
+            message = ToolResult.from_text(
+                content,
+                status=ToolResultStatus.CANCELLED,
+                metadata=metadata,
+            ).to_message(call)
+            state.messages.append(message)
+            state.touch()
+            self._emit(ToolFinished(state.session_id, message))
+        pending_calls.clear()
 
     def _emit(self, event: RuntimeEvent) -> None:
         if self._event_sink is not None:

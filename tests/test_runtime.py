@@ -11,6 +11,8 @@ from coding_agent.core.events import (
     ModelResponded,
     ModelTextDelta,
     ModelThinkingDelta,
+    ToolFinished,
+    ToolStarted,
     TurnFinished,
     TurnStarted,
 )
@@ -62,6 +64,15 @@ class EchoTool(Tool[EchoInput]):
         self.executions.append(arguments.text)
         self.permission_handlers.append(context.permission_handler)
         return ToolResult.from_text(arguments.text)
+
+
+class InterruptingTool(Tool[EchoInput]):
+    name = "interrupt"
+    description = "Interrupt execution."
+    input_model = EchoInput
+
+    def execute(self, arguments: EchoInput, context: ToolContext) -> ToolResult:
+        raise KeyboardInterrupt
 
 
 class SequenceProvider(LLMProvider):
@@ -163,6 +174,101 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(tool.permission_handlers, [permission_handler])
         state.validate()
         self.assertIsInstance(events[-1], TurnFinished)
+
+    def test_provider_interrupt_returns_a_valid_interrupted_session(self) -> None:
+        class InterruptingProvider(LLMProvider):
+            def complete(
+                self,
+                request: CompletionRequest,
+                *,
+                event_sink: CompletionEventSink | None = None,
+            ) -> AssistantMessage:
+                raise KeyboardInterrupt
+
+        events = []
+        state = self.state()
+
+        result = Runtime(
+            InterruptingProvider(),
+            (),
+            event_sink=events.append,
+            state_home=self.root,
+        ).run_turn(state, "work")
+
+        self.assertEqual(result.status, RunStatus.INTERRUPTED)
+        self.assertEqual(result.model_turns, 0)
+        self.assertEqual(result.tool_calls, 0)
+        self.assertEqual(state.status, SessionStatus.INTERRUPTED)
+        self.assertEqual(len(state.messages), 1)
+        state.validate()
+        self.assertEqual(
+            [type(event) for event in events],
+            [TurnStarted, ModelRequested, TurnFinished],
+        )
+
+    def test_tool_interrupt_cancels_pending_calls_and_keeps_session_valid(self) -> None:
+        provider = SequenceProvider(
+            [
+                tool_message(
+                    ToolCall(id="call-1", name="interrupt", arguments={"text": "first"}),
+                    ToolCall(id="call-2", name="echo", arguments={"text": "second"}),
+                ),
+            ]
+        )
+        events = []
+        state = self.state()
+        echo = EchoTool()
+
+        result = Runtime(
+            provider,
+            (InterruptingTool(), echo),
+            event_sink=events.append,
+            state_home=self.root,
+        ).run_turn(state, "work")
+
+        self.assertEqual(result.status, RunStatus.INTERRUPTED)
+        self.assertEqual(result.model_turns, 1)
+        self.assertEqual(result.tool_calls, 1)
+        self.assertEqual(state.status, SessionStatus.INTERRUPTED)
+        self.assertEqual(echo.executions, [])
+        tool_results = [
+            message for message in state.messages if isinstance(message, ToolResultMessage)
+        ]
+        self.assertEqual(len(tool_results), 2)
+        self.assertEqual(
+            [message.status for message in tool_results],
+            [ToolResultStatus.CANCELLED, ToolResultStatus.CANCELLED],
+        )
+        self.assertNotIn("not_executed", tool_results[0].metadata)
+        self.assertTrue(tool_results[1].metadata["not_executed"])
+        self.assertEqual(tool_results[1].metadata["reason"], "turn_interrupted")
+        state.validate()
+        self.assertEqual(
+            [type(event) for event in events],
+            [
+                TurnStarted,
+                ModelRequested,
+                ModelResponded,
+                ToolStarted,
+                ToolFinished,
+                ToolFinished,
+                TurnFinished,
+            ],
+        )
+        store = SessionStore(state_home=self.root)
+        store.save(state)
+        restored = store.load(state.session_id)
+
+        resumed = Runtime(
+            SequenceProvider([text_message("resumed")]),
+            (),
+            state_home=self.root,
+        ).run_turn(restored, "continue")
+
+        self.assertEqual(resumed.status, RunStatus.COMPLETED)
+        self.assertEqual(resumed.final_text, "resumed")
+        self.assertEqual(restored.status, SessionStatus.IDLE)
+        restored.validate()
 
     def test_runtime_stores_large_tool_output_beside_the_dated_checkpoint(self) -> None:
         provider = SequenceProvider(

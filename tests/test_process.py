@@ -1,8 +1,10 @@
 import signal
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from coding_agent.tools.process import run_limited_process
 
@@ -52,6 +54,38 @@ class ProcessTests(unittest.TestCase):
         self.assertFalse(output.incomplete)
         self.assertEqual(output.returncode, -signal.SIGKILL)
         self.assertLess(output.duration_ms, 2000)
+        self.assertFalse(_process_is_running(child_pid))
+
+    def test_keyboard_interrupt_kills_the_process_tree(self) -> None:
+        child_pid_path = self.cwd / "child.pid"
+        child_source = (
+            "import signal, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
+        )
+        parent_source = (
+            "import pathlib, signal, subprocess, sys, time; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            f"child = subprocess.Popen([sys.executable, '-c', {child_source!r}]); "
+            f"pathlib.Path({str(child_pid_path)!r}).write_text(str(child.pid)); "
+            "time.sleep(30)"
+        )
+
+        def interrupt_after_child_starts(selector, timeout=None):
+            deadline = time.monotonic() + 2
+            while not child_pid_path.exists():
+                if time.monotonic() >= deadline:
+                    self.fail("child process did not start")
+                time.sleep(0.01)
+            raise KeyboardInterrupt
+
+        with patch(
+            "coding_agent.tools.process.selectors.DefaultSelector.select",
+            new=interrupt_after_child_starts,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_python(parent_source)
+
+        child_pid = int(child_pid_path.read_text())
         self.assertFalse(_process_is_running(child_pid))
 
     def test_output_limit_stops_capture_and_marks_it_incomplete(self) -> None:
