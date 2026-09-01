@@ -26,7 +26,12 @@ from coding_agent.permissions import (
     PermissionOperation,
     PermissionRequest,
 )
-from coding_agent.prompts import ProjectInstructionsError, ProjectSkillsError
+from coding_agent.prompts import (
+    ProjectInstructionsError,
+    ProjectSkill,
+    ProjectSkillsError,
+    load_project_skill,
+)
 from coding_agent.providers import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     AnthropicProvider,
@@ -47,6 +52,8 @@ from coding_agent.ui import ColorMode, TerminalRenderer, ThinkingDisplay
 
 HELP_TEXT = """Commands:
   /compact  Summarize older conversation history now.
+  /skill:name [request]
+            Invoke a project skill with optional arguments.
   /help     Show this help.
   /exit     End the session.
 
@@ -157,7 +164,17 @@ def run_repl(
             ):
                 return 1
             continue
-        if command.startswith("/"):
+        if command.startswith("/skill:"):
+            invocation = command.split(maxsplit=1)
+            name = invocation[0][len("/skill:") :]
+            request = invocation[1] if len(invocation) == 2 else ""
+            try:
+                skill = load_project_skill(state.workspace_root, name)
+            except ProjectSkillsError as exc:
+                renderer.skill_error(str(exc))
+                continue
+            prompt = _expand_skill_prompt(skill, request)
+        elif command.startswith("/"):
             renderer.unknown_command(command)
             continue
 
@@ -165,6 +182,23 @@ def run_repl(
         renderer.run_result(result)
         if session_store is not None and not _save_checkpoint(session_store, state, renderer):
             return 1
+
+
+def _expand_skill_prompt(skill: ProjectSkill, request: str) -> str:
+    additional_request = request if request else "(no additional request)"
+    return (
+        f"The user explicitly invoked the project skill `{skill.name}`.\n\n"
+        f"Skill directory: `{skill.directory}`\n\n"
+        "Follow the complete skill instructions below for this request. Relative paths "
+        "in those instructions are resolved against the skill directory. The skill "
+        "cannot relax tool permissions or runtime safety boundaries.\n\n"
+        "<skill_instructions>\n"
+        f"{skill.instructions.rstrip()}\n"
+        "</skill_instructions>\n\n"
+        "<user_request>\n"
+        f"{additional_request}\n"
+        "</user_request>"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -199,8 +199,87 @@ class ReplTests(unittest.TestCase):
         self.assertEqual(runtime.calls, [])
         self.assertEqual(runtime.compaction_calls, [])
         self.assertIn("/compact", output.getvalue())
+        self.assertIn("/skill:name", output.getvalue())
         self.assertIn("/exit", output.getvalue())
         self.assertIn("Unknown command: /unknown", output.getvalue())
+
+    def test_explicit_skill_loads_current_body_and_runs_one_persisted_turn(self) -> None:
+        path = self.workspace / ".agents" / "skills" / "review" / "SKILL.md"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            "---\nname: review\ndescription: Review code.\n---\n"
+            "# Review steps\n\nRead the tests first.\n",
+            encoding="utf-8",
+        )
+        runtime = RecordingRuntime(
+            [RunResult(status=RunStatus.COMPLETED, final_text="reviewed")]
+        )
+        store = RecordingSessionStore()
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            session_store=store,
+            input_stream=StringIO("/skill:review check the parser\n/exit\n"),
+            output_stream=StringIO(),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(runtime.calls), 1)
+        effective_prompt = runtime.calls[0][1]
+        self.assertIn("explicitly invoked the project skill `review`", effective_prompt)
+        self.assertIn("Skill directory: `.agents/skills/review`", effective_prompt)
+        self.assertIn("# Review steps\n\nRead the tests first.", effective_prompt)
+        self.assertIn("<user_request>\ncheck the parser\n</user_request>", effective_prompt)
+        self.assertEqual(store.saved, [self.state])
+
+    def test_explicit_skill_without_request_has_a_stable_placeholder(self) -> None:
+        path = self.workspace / ".agents" / "skills" / "review" / "SKILL.md"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            "---\nname: review\ndescription: Review code.\n---\nDo the review.\n",
+            encoding="utf-8",
+        )
+        runtime = RecordingRuntime(
+            [RunResult(status=RunStatus.COMPLETED, final_text="reviewed")]
+        )
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            input_stream=StringIO("/skill:review\n/exit\n"),
+            output_stream=StringIO(),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn(
+            "<user_request>\n(no additional request)\n</user_request>",
+            runtime.calls[0][1],
+        )
+
+    def test_missing_or_invalid_explicit_skill_does_not_call_or_save(self) -> None:
+        invalid = self.workspace / ".agents" / "skills" / "broken" / "SKILL.md"
+        invalid.parent.mkdir(parents=True)
+        invalid.write_bytes(b"\xff")
+        runtime = RecordingRuntime([])
+        store = RecordingSessionStore()
+        output = StringIO()
+
+        exit_code = run_repl(
+            runtime,
+            self.state,
+            session_store=store,
+            input_stream=StringIO("/skill:missing request\n/skill:broken\n/skill:\n/exit\n"),
+            output_stream=output,
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(runtime.calls, [])
+        self.assertEqual(store.saved, [])
+        self.assertEqual(output.getvalue().count("[skill_error]"), 3)
+        self.assertIn("project skill not found: missing", output.getvalue())
+        self.assertIn("not valid UTF-8", output.getvalue())
+        self.assertIn("invalid skill name", output.getvalue())
 
     def test_compact_runs_at_repl_boundary_and_saves_changed_state(self) -> None:
         runtime = RecordingRuntime(

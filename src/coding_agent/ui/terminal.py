@@ -185,6 +185,10 @@ class TerminalRenderer:
         label = self._style("Unknown command:", _RED)
         self.write(f"{label} {command}\n")
 
+    def skill_error(self, message: str) -> None:
+        label = self._style("[skill_error]", _BOLD, _RED)
+        self.write(f"{label} {message}\n")
+
     def permission_request(self, question: str, label: str, target: str) -> None:
         box_width = _permission_box_width(self.output_stream)
         inner_width = box_width - 4

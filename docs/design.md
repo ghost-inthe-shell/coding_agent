@@ -14,7 +14,7 @@ conversation span 包含用户确认等待。工具状态按完整协议分别�
 human/JSON 输出都不持久化，PASS、验收失败和配置错误分别使用退出码 0、1、2。
 
 交互客户端直接采用同步 REPL，并在同一个 `SessionState` 上执行多轮对话。第一版提供 help、
-compact 和 exit 命令，Linux 交互 TTY 使用 Python 标准库 GNU readline 编辑，并显式启用
+compact、skill 和 exit 命令，Linux 交互 TTY 使用 Python 标准库 GNU readline 编辑，并显式启用
 bracketed paste。普通 Enter 提交；奇数个行尾反斜杠表示移除最后一个反斜杠并继续收集下一行，
 从而在同一条用户消息中插入换行。终端展示使用标准库 ANSI Renderer 和同步流式输出；不实现
 one-shot 模式、TUI 或 REPL 内会话切换。
@@ -41,6 +41,12 @@ one-shot 模式、TUI 或 REPL 内会话切换。
   链接允许，越界链接拒绝。缺失或空白文件视为无项目指令，其他读取错误终止创建。第一版不搜索
   父目录或子目录，不支持 include、条件规则、运行中重载或用户级全局指令。项目指令不能改变
   代码强制执行的工具权限和 Runtime 安全边界。
+- 项目技能只从 `.agents/skills` 的直接子目录发现。每个 `SKILL.md` 限制为 50,000 字符的
+  UTF-8 文本，YAML frontmatter 只允许与目录一致的 kebab-case `name` 和非空 `description`。
+  新 session 的 system prompt 只快照经过 XML 转义的技能元数据目录，不含正文；自动选择后由
+  模型使用 `read_file` 读取完整正文。`/skill:name [request]` 则严格加载当前正文，将其与请求
+  展开为实际 UserMessage 后交给 Runtime，因此可在 resume 后显式使用新增或更新的技能。技能
+  不能放宽工具权限或 Runtime 安全边界。第一版不提供全局技能、嵌套发现或 skill tool。
 - Provider 接收标准消息与工具 schema，直接返回标准化 `AssistantMessage`。同步请求可以额外
   发出 text/thinking delta 供即时展示，但 delta 不进入 `SessionState`；厂商特有响应对象也
   不得进入会话状态。
@@ -63,8 +69,9 @@ one-shot 模式、TUI 或 REPL 内会话切换。
   `reasoning_content`/`reasoning`/`reasoning_text` 标准化为 `ThinkingBlock`，并在后续请求
   中按原字段回传。
 - Anthropic Provider 使用同步 Messages API，并把连续 tool results 合并为一个 user 消息。
-- 核心消息和会话状态使用 dataclass。Pydantic v2 只用于工具入参的严格校验
-  （`strict=True`、禁止额外字段）和 JSON Schema 生成。
+- 核心消息和会话状态使用 dataclass。Pydantic v2 用于工具入参与技能 frontmatter 的严格校验
+  （`strict=True`、禁止额外字段）；工具 schema 由 Pydantic 生成。技能 YAML 只通过
+  `yaml.safe_load` 解析。
 
 ## Runtime
 

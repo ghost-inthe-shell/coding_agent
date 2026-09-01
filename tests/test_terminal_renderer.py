@@ -264,6 +264,17 @@ class TerminalRendererTests(unittest.TestCase):
             "[compacted] summarized_messages=3, tokens_before=1200, tokens_after=450\n",
         )
 
+    def test_skill_error_uses_a_distinct_plain_text_label(self) -> None:
+        output = StringIO()
+        renderer = TerminalRenderer(output, color=ColorMode.NEVER)
+
+        renderer.skill_error("project skill not found: review")
+
+        self.assertEqual(
+            output.getvalue(),
+            "[skill_error] project skill not found: review\n",
+        )
+
     def test_permission_request_uses_a_fixed_width_box_and_wraps_target(self) -> None:
         output = StringIO()
         renderer = TerminalRenderer(output, color=ColorMode.NEVER)

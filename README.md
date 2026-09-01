@@ -24,7 +24,8 @@ src/coding_agent/
 - 工具输入由 Pydantic v2 严格校验；模型可见工具输出统一限制为 50,000 字符。
 
 创建新 session 时，如果 workspace 根目录存在 `AGENTS.md`，程序会把其中的项目约束加入
-system prompt 快照。只加载根目录这一个文件，不搜索父目录、子目录或全局配置。
+system prompt 快照。项目还可在 `.agents/skills/` 声明按需加载的技能；第一版不搜索父目录、
+子目录或用户级全局配置。
 
 长期设计决策见 [`docs/design.md`](docs/design.md)。
 
@@ -150,6 +151,37 @@ coding-agent \
 保存。修改该文件后需要创建新 session 才会生效；`--resume` 始终使用原有快照。项目指令不能
 放宽工具权限或 Runtime 安全边界。
 
+### 项目技能
+
+每个项目技能放在 `.agents/skills/<name>/SKILL.md`。第一版只发现 `skills` 的直接子目录，名称
+必须是小写字母、数字和连字符组成的 kebab-case，且必须与目录名一致。文件使用 UTF-8，最多
+50,000 字符，格式如下：
+
+```markdown
+---
+name: review
+description: Review an implementation and its tests.
+---
+# Review workflow
+
+Read the implementation and tests, then report correctness risks.
+```
+
+frontmatter 只允许 `name` 和 `description`。新建 session 时，system prompt 仅保存技能名称、
+描述和 `SKILL.md` 路径，不保存正文。模型在任务与描述匹配时会通过 `read_file` 读取完整正文，
+这是 progressive disclosure：没有被选中的技能不占用上下文正文空间。
+
+也可在 REPL 中显式调用当前项目技能：
+
+```text
+/skill:review check the parser changes
+```
+
+显式调用会在执行该轮前重新读取并严格验证当前 `SKILL.md`，再把技能正文和可选请求组合成
+持久化的有效 UserMessage。因此它也适用于旧 session 中新增或更新的技能；缺失或无效技能只
+报告 `[skill_error]`，不会调用模型或保存空 checkpoint。技能中的相对路径以其技能目录为基准，
+技能不能放宽工具权限或 Runtime 安全边界。
+
 也可不激活虚拟环境，直接使用其中的可执行文件：
 
 ```bash
@@ -185,7 +217,8 @@ python -m pip install -e '.[openai,anthropic]'
 ```
 
 REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看命令，输入 `/compact`
-可立即将较早历史更新为 rolling summary，输入 `/exit` 或按 Ctrl-D 退出。原始消息仍完整保存
+可立即将较早历史更新为 rolling summary，使用 `/skill:name [request]` 显式调用项目技能，输入
+`/exit` 或按 Ctrl-D 退出。原始消息仍完整保存
 在 session checkpoint 中；压缩只改变后续发送给模型的活动上下文。workspace 外的只读工具
 调用会显示规范化路径并逐次请求确认。Linux 交互式终端使用 GNU readline 提供光标移动、
 退格和当前进程内历史，并显式启用 bracketed paste，使终端支持时多行粘贴保持为一条消息。
