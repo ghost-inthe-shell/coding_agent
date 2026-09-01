@@ -255,6 +255,24 @@ python3 evals/run.py verify \
   /tmp/coding-agent-eval/cpp_binary_search
 ```
 
+验收后可用 case ID 和 session ID 重新运行 verifier，并汇总 checkpoint 中的确定性指标：
+
+```bash
+python3 evals/run.py report \
+  python_project_instructions \
+  ed15e492b2d64a8aa86004db6ea3748b
+
+python3 evals/run.py report \
+  python_project_instructions \
+  ed15e492b2d64a8aa86004db6ea3748b \
+  --json
+```
+
+report 展示 Provider、模型、用户轮次、Agent 模型调用、五种工具结果状态、conversation span、
+token usage 和 compact 状态。它只读取 session，并对其中保存的 workspace 运行外部 verifier，
+不修改 session 或 workspace；退出码 `0` 表示通过、`1` 表示 verifier 失败、`2` 表示参数、case
+或 session 配置错误。
+
 不同版本之间比较时，应固定模型、Provider、reasoning、`--max-tokens`、`--max-turns` 和任务
 初始版本，并保留 session ID。完整协议、安全边界和其他 case 用法见
 [`evals/README.md`](evals/README.md)。

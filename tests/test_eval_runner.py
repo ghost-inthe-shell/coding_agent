@@ -1,12 +1,44 @@
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import Mock, patch
 
-from evals.run import EvalConfigurationError, load_case, prepare_case, verify_case
+from coding_agent.core.session import SessionState
+from coding_agent.core.session_store import SessionNotFoundError
+from evals import run as eval_run
+from evals.run import (
+    EvalConfigurationError,
+    evaluate_case,
+    load_case,
+    prepare_case,
+    report_case,
+    verify_case,
+)
 
 
 class EvalRunnerTests(unittest.TestCase):
+    def test_documented_script_entrypoint_can_load_report_command(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+
+        completed = subprocess.run(
+            [sys.executable, str(project_root / "evals" / "run.py"), "report", "--help"],
+            cwd=project_root,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("case_id", completed.stdout)
+        self.assertIn("session_id", completed.stdout)
+        self.assertIn("--json", completed.stdout)
+
     def test_load_prepare_and_verify_case(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -58,6 +90,97 @@ class EvalRunnerTests(unittest.TestCase):
 
             with self.assertRaises(EvalConfigurationError):
                 load_case(case_path)
+
+    def test_report_command_loads_session_and_emits_only_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            case = load_case(self._write_case(root))
+            state = SessionState(
+                session_id="session-1",
+                workspace_root=str(case.workspace_template),
+                system_prompt="System.",
+            )
+            store = Mock()
+            store.load.return_value = state
+            output = StringIO()
+            errors = StringIO()
+
+            with (
+                patch.object(eval_run, "load_cases", return_value={case.id: case}),
+                patch.object(eval_run, "SessionStore", return_value=store),
+                redirect_stdout(output),
+                redirect_stderr(errors),
+            ):
+                exit_code = eval_run.main(["report", "sample_case", "session-1", "--json"])
+
+            self.assertEqual(exit_code, 0)
+            store.load.assert_called_once_with("session-1")
+            document = json.loads(output.getvalue())
+            self.assertEqual(document["verdict"], "PASS")
+            self.assertEqual(document["session_id"], "session-1")
+            self.assertEqual(errors.getvalue(), "")
+
+    def test_failed_report_keeps_metrics_on_stdout_and_diagnostics_on_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            case = load_case(self._write_case(root))
+            failed_workspace = root / "failed-workspace"
+            failed_workspace.mkdir()
+            state = SessionState(
+                session_id="failed-session",
+                workspace_root=str(failed_workspace),
+                system_prompt="System.",
+            )
+            output = StringIO()
+            errors = StringIO()
+
+            with redirect_stdout(output), redirect_stderr(errors):
+                exit_code = report_case(case, state)
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("Verdict: FAIL", output.getvalue())
+            self.assertIn("Verifier: verifier exited with 1", errors.getvalue())
+
+    def test_verifier_timeout_is_a_structured_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            case = load_case(self._write_case(Path(temporary_directory)))
+            with patch.object(
+                eval_run.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd=["verify"],
+                    timeout=case.timeout_seconds,
+                    output=b"partial stdout",
+                    stderr=b"partial stderr",
+                ),
+            ):
+                outcome = evaluate_case(case, case.workspace_template)
+
+            self.assertFalse(outcome.passed)
+            self.assertTrue(outcome.timed_out)
+            self.assertEqual(
+                outcome.summary,
+                f"verifier timed out after {case.timeout_seconds}s",
+            )
+            self.assertEqual(outcome.stdout, "partial stdout")
+            self.assertEqual(outcome.stderr, "partial stderr")
+
+    def test_report_command_reports_missing_session_as_configuration_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            case = load_case(self._write_case(Path(temporary_directory)))
+            store = Mock()
+            store.load.side_effect = SessionNotFoundError("session not found: missing")
+            errors = StringIO()
+
+            with (
+                patch.object(eval_run, "load_cases", return_value={case.id: case}),
+                patch.object(eval_run, "SessionStore", return_value=store),
+                redirect_stderr(errors),
+            ):
+                exit_code = eval_run.main(["report", "sample_case", "missing"])
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("session not found: missing", errors.getvalue())
 
     def _write_case(self, root: Path) -> Path:
         case_path = root / "sample_case"

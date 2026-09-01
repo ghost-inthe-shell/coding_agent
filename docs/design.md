@@ -8,6 +8,11 @@
 diff，也不使用 LLM judge。无人值守评测必须在一次性容器内运行；容器隔离完成前只做逐次确认
 权限的人工监督验收。
 
+`evals/run.py report` 通过 case ID 和 session ID 重新运行 verifier，并从严格 checkpoint 派生
+只读指标。Agent 模型调用数只统计 assistant 消息，compact 内部调用只反映在累计 usage；
+conversation span 包含用户确认等待。工具状态按完整协议分别统计，报告不估算不稳定的模型价格。
+human/JSON 输出都不持久化，PASS、验收失败和配置错误分别使用退出码 0、1、2。
+
 交互客户端直接采用同步 REPL，并在同一个 `SessionState` 上执行多轮对话。第一版提供 help、
 compact 和 exit 命令，Linux 交互 TTY 使用 Python 标准库 GNU readline 编辑，并显式启用
 bracketed paste。普通 Enter 提交；奇数个行尾反斜杠表示移除最后一个反斜杠并继续收集下一行，
