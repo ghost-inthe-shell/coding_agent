@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from io import StringIO
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from coding_agent import cli
 from coding_agent.cli import InteractivePermissionHandler, build_parser, run_repl
@@ -13,6 +13,7 @@ from coding_agent.core.types import RunStatus
 from coding_agent.core.usage import Usage
 from coding_agent.permissions import PermissionDecision, PermissionOperation, PermissionRequest
 from coding_agent.providers import ApiDialect, ReasoningLevel
+from coding_agent.ui import ColorMode, TerminalRenderer
 
 
 class RecordingRuntime:
@@ -348,6 +349,7 @@ class ReplTests(unittest.TestCase):
         self.assertEqual(arguments.context_window, 128_000)
         self.assertEqual(arguments.api_dialect, "generic")
         self.assertEqual(arguments.reasoning, "default")
+        self.assertEqual(arguments.color, "auto")
 
     def test_parser_does_not_expose_internal_minimal_reasoning(self) -> None:
         with self.assertRaises(SystemExit):
@@ -447,7 +449,13 @@ class ReplTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         store.load.assert_called_once_with("session-1")
         store.save.assert_not_called()
-        repl.assert_called_once_with(runtime, self.state, session_store=store)
+        repl.assert_called_once_with(
+            runtime,
+            self.state,
+            session_store=store,
+            renderer=ANY,
+        )
+        self.assertIsInstance(repl.call_args.kwargs["renderer"], TerminalRenderer)
 
     def test_main_saves_new_session_before_starting_repl(self) -> None:
         store = Mock()
@@ -475,7 +483,8 @@ class ReplTests(unittest.TestCase):
         self.assertEqual(state.workspace_root, str(self.workspace))
         self.assertEqual(len(state.session_id), 32)
         self.assertEqual(runtime_class.call_args.kwargs["limits"].max_model_calls, 64)
-        repl.assert_called_once_with(runtime, state, session_store=store)
+        repl.assert_called_once_with(runtime, state, session_store=store, renderer=ANY)
+        self.assertIsInstance(repl.call_args.kwargs["renderer"], TerminalRenderer)
 
     def test_main_fails_before_provider_creation_when_resume_cannot_load(self) -> None:
         store = Mock()
@@ -535,6 +544,10 @@ class ReplTests(unittest.TestCase):
                 self.state,
                 input_stream=input_stream,
                 output_stream=output_stream,
+                renderer=TerminalRenderer(
+                    output_stream,
+                    color=ColorMode.NEVER,
+                ),
             )
 
         self.assertEqual(exit_code, 0)

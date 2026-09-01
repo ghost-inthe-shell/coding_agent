@@ -20,7 +20,6 @@ from coding_agent.core.results import CompactionResult, RunResult
 from coding_agent.core.runtime import DEFAULT_MAX_MODEL_CALLS, Runtime, RuntimeLimits
 from coding_agent.core.session import SessionState
 from coding_agent.core.session_store import SessionStore, SessionStoreError
-from coding_agent.core.types import RunStatus
 from coding_agent.core.usage import Usage
 from coding_agent.permissions import (
     PermissionDecision,
@@ -43,6 +42,7 @@ from coding_agent.tools import (
     RunShellTool,
     WriteFileTool,
 )
+from coding_agent.ui import ColorMode, TerminalRenderer
 
 HELP_TEXT = """Commands:
   /compact  Summarize older conversation history now.
@@ -75,9 +75,11 @@ class InteractivePermissionHandler:
         *,
         input_stream: TextIO = sys.stdin,
         output_stream: TextIO = sys.stdout,
+        renderer: TerminalRenderer | None = None,
     ) -> None:
         self._input_stream = input_stream
         self._output_stream = output_stream
+        self._renderer = renderer or TerminalRenderer(output_stream)
 
     def __call__(self, request: PermissionRequest) -> PermissionDecision:
         if request.operation is PermissionOperation.READ:
@@ -92,11 +94,7 @@ class InteractivePermissionHandler:
         else:
             raise ValueError(f"unsupported permission operation: {request.operation!r}")
         displayed_target = json.dumps(request.target, ensure_ascii=False)
-        _write(
-            self._output_stream,
-            f"{question}\n"
-            f"  {label}: {displayed_target}\n",
-        )
+        self._renderer.permission_request(question, label, displayed_target)
         try:
             answer = _read_line(
                 "Approve once? [y/N] ",
@@ -104,15 +102,17 @@ class InteractivePermissionHandler:
                 self._output_stream,
             )
         except KeyboardInterrupt:
-            _write(self._output_stream, "\nDenied.\n")
+            self._renderer.write("\n")
+            self._renderer.permission_decision(approved=False)
             return PermissionDecision.DENY
         if answer is None:
-            _write(self._output_stream, "\nDenied.\n")
+            self._renderer.write("\n")
+            self._renderer.permission_decision(approved=False)
             return PermissionDecision.DENY
         if answer.strip().lower() in {"y", "yes"}:
-            _write(self._output_stream, "Approved.\n")
+            self._renderer.permission_decision(approved=True)
             return PermissionDecision.ALLOW
-        _write(self._output_stream, "Denied.\n")
+        self._renderer.permission_decision(approved=False)
         return PermissionDecision.DENY
 
 
@@ -123,26 +123,22 @@ def run_repl(
     session_store: _SessionSaver | None = None,
     input_stream: TextIO = sys.stdin,
     output_stream: TextIO = sys.stdout,
+    renderer: TerminalRenderer | None = None,
 ) -> int:
     """Run a synchronous multi-turn REPL over one SessionState."""
 
+    renderer = renderer or TerminalRenderer(output_stream)
     _configure_terminal_input(input_stream, output_stream)
-    _write(
-        output_stream,
-        f"Coding Agent\n"
-        f"Session: {state.session_id}\n"
-        f"Workspace: {state.workspace_root}\n"
-        "Type /help for commands.\n",
-    )
+    renderer.banner(state.session_id, state.workspace_root)
     while True:
         try:
-            prompt = _read_prompt(input_stream, output_stream)
+            prompt = _read_prompt(input_stream, output_stream, renderer)
         except KeyboardInterrupt:
-            _write(output_stream, "\n")
+            renderer.write("\n")
             return 130
 
         if prompt is None:
-            _write(output_stream, "\n")
+            renderer.write("\n")
             return 0
 
         command = prompt.strip()
@@ -151,27 +147,27 @@ def run_repl(
         if command == "/exit":
             return 0
         if command == "/help":
-            _write(output_stream, HELP_TEXT)
+            renderer.help(HELP_TEXT)
             continue
         if command == "/compact":
             compaction = runtime.compact(state)
-            _print_compaction_result(compaction, output_stream)
+            renderer.compaction_result(compaction)
             if (
                 session_store is not None
                 and (compaction.compacted or compaction.usage != Usage())
-                and not _save_checkpoint(session_store, state, output_stream)
+                and not _save_checkpoint(session_store, state, renderer)
             ):
                 return 1
             continue
         if command.startswith("/"):
-            _write(output_stream, f"Unknown command: {command}\n")
+            renderer.unknown_command(command)
             continue
 
         result = runtime.run_turn(state, prompt)
-        _print_result(result, output_stream)
+        renderer.run_result(result)
         if (
             session_store is not None
-            and not _save_checkpoint(session_store, state, output_stream)
+            and not _save_checkpoint(session_store, state, renderer)
         ):
             return 1
 
@@ -239,6 +235,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CONTEXT_WINDOW,
         help=f"model context window in tokens (default: {DEFAULT_CONTEXT_WINDOW})",
     )
+    parser.add_argument(
+        "--color",
+        choices=tuple(mode.value for mode in ColorMode),
+        default=ColorMode.AUTO.value,
+        help="terminal color mode (default: auto)",
+    )
     return parser
 
 
@@ -288,6 +290,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ImportError, ValueError) as exc:
         parser.error(str(exc))
 
+    renderer = TerminalRenderer(sys.stdout, color=ColorMode(arguments.color))
     runtime = Runtime(
         provider,
         (
@@ -298,7 +301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             EditFileTool(),
             RunShellTool(),
         ),
-        permission_handler=InteractivePermissionHandler(),
+        permission_handler=InteractivePermissionHandler(renderer=renderer),
         context_window=arguments.context_window,
         limits=RuntimeLimits(max_model_calls=arguments.max_turns),
     )
@@ -308,7 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except SessionStoreError as exc:
             _write(sys.stderr, f"coding-agent: session error: {exc}\n")
             return 1
-    return run_repl(runtime, state, session_store=session_store)
+    return run_repl(runtime, state, session_store=session_store, renderer=renderer)
 
 
 def _create_provider(
@@ -342,61 +345,15 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
-def _print_result(result: RunResult, output_stream: TextIO) -> None:
-    if result.final_text:
-        _write(output_stream, f"assistant> {result.final_text}\n")
-    if result.status is not RunStatus.COMPLETED:
-        detail = result.error_message or result.status.value
-        diagnostics = [
-            f"model_turns={result.model_turns}",
-            f"tool_calls={result.tool_calls}",
-            f"output_tokens={result.usage.output_tokens}",
-            f"reasoning_tokens={result.usage.reasoning_tokens}",
-        ]
-        if result.max_output_tokens is not None:
-            diagnostics.append(
-                f"max_output_tokens_per_call={result.max_output_tokens}"
-            )
-        _write(
-            output_stream,
-            f"[{result.status.value}] {detail} ({', '.join(diagnostics)})\n",
-        )
-
-
-def _print_compaction_result(result: CompactionResult, output_stream: TextIO) -> None:
-    if result.compacted:
-        _write(
-            output_stream,
-            "[compacted] "
-            f"summarized_messages={result.summarized_messages}, "
-            f"tokens_before={result.tokens_before}, "
-            f"tokens_after={result.tokens_after}\n",
-        )
-    elif result.error_message is not None:
-        _write(output_stream, f"[compact_error] {result.error_message}\n")
-    elif result.tokens_before is not None and result.tokens_after is not None:
-        _write(
-            output_stream,
-            "[compact] not applied: "
-            f"tokens_before={result.tokens_before}, "
-            f"tokens_after={result.tokens_after}\n",
-        )
-    else:
-        _write(output_stream, "[compact] nothing to compact\n")
-
-
 def _save_checkpoint(
     session_store: _SessionSaver,
     state: SessionState,
-    output_stream: TextIO,
+    renderer: TerminalRenderer,
 ) -> bool:
     try:
         session_store.save(state)
     except SessionStoreError as exc:
-        _write(
-            output_stream,
-            f"[session_error] checkpoint failed; REPL terminated: {exc}\n",
-        )
+        renderer.session_error(str(exc))
         return False
     return True
 
@@ -412,11 +369,19 @@ def _configure_terminal_input(input_stream: TextIO, output_stream: TextIO) -> No
         _readline.parse_and_bind("set enable-bracketed-paste on")
 
 
-def _read_prompt(input_stream: TextIO, output_stream: TextIO) -> str | None:
+def _read_prompt(
+    input_stream: TextIO,
+    output_stream: TextIO,
+    renderer: TerminalRenderer,
+) -> str | None:
     """Read one prompt; an odd trailing backslash inserts a newline."""
 
     lines: list[str] = []
-    prompt = "> "
+    uses_terminal_editor = _uses_terminal_editor(input_stream, output_stream)
+    prompt = renderer.input_prompt(
+        continuation=False,
+        readline=uses_terminal_editor,
+    )
     while True:
         line = _read_line(prompt, input_stream, output_stream)
         if line is None:
@@ -425,7 +390,10 @@ def _read_prompt(input_stream: TextIO, output_stream: TextIO) -> str | None:
         trailing_backslashes = len(line) - len(line.rstrip("\\"))
         if trailing_backslashes % 2 == 1:
             lines.append(line[:-1])
-            prompt = "... "
+            prompt = renderer.input_prompt(
+                continuation=True,
+                readline=uses_terminal_editor,
+            )
             continue
         lines.append(line)
         return "\n".join(lines)
