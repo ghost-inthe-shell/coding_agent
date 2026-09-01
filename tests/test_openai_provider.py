@@ -14,6 +14,8 @@ from coding_agent.providers import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     ApiDialect,
     CompletionRequest,
+    CompletionTextDelta,
+    CompletionThinkingDelta,
     OpenAICompatibleProvider,
     ProviderError,
     ReasoningLevel,
@@ -72,7 +74,189 @@ def response(
     )
 
 
+def stream_chunk(
+    *,
+    content=None,
+    tool_calls=(),
+    finish_reason=None,
+    usage=None,
+    **delta_fields,
+):
+    return namespace(
+        id="response-stream-1",
+        model="actual-stream-model",
+        choices=(
+            namespace(
+                index=0,
+                finish_reason=finish_reason,
+                delta=namespace(
+                    content=content,
+                    tool_calls=tool_calls,
+                    **delta_fields,
+                ),
+            ),
+        ),
+        usage=usage,
+    )
+
+
+def usage_chunk():
+    return namespace(
+        id="response-stream-1",
+        model="actual-stream-model",
+        choices=(),
+        usage=namespace(
+            prompt_tokens=20,
+            completion_tokens=8,
+            prompt_tokens_details=namespace(cached_tokens=3),
+            completion_tokens_details=namespace(reasoning_tokens=4),
+        ),
+    )
+
+
+class FailingStream:
+    def __iter__(self):
+        yield stream_chunk(content="partial")
+        raise RuntimeError("connection dropped")
+
+
 class OpenAICompatibleProviderTests(unittest.TestCase):
+    def test_streams_thinking_and_text_then_returns_complete_message(self) -> None:
+        completions = FakeCompletions(
+            (
+                stream_chunk(reasoning_content="inspect "),
+                stream_chunk(reasoning_content="first"),
+                stream_chunk(content="hel"),
+                stream_chunk(content="lo", finish_reason="stop"),
+                usage_chunk(),
+            )
+        )
+        provider = OpenAICompatibleProvider(
+            "requested-model",
+            stream=True,
+            client=FakeClient(completions),
+        )
+        events = []
+
+        result = provider.complete(
+            CompletionRequest(messages=(), system_prompt="System"),
+            event_sink=events.append,
+        )
+
+        self.assertEqual(
+            events,
+            [
+                CompletionThinkingDelta("inspect "),
+                CompletionThinkingDelta("first"),
+                CompletionTextDelta("hel"),
+                CompletionTextDelta("lo"),
+            ],
+        )
+        self.assertEqual(result.thinking, "inspect first")
+        self.assertEqual(result.text, "hello")
+        self.assertEqual(result.model, "actual-stream-model")
+        self.assertEqual(result.response_id, "response-stream-1")
+        self.assertEqual(result.usage.input_tokens, 20)
+        self.assertEqual(result.usage.output_tokens, 8)
+        thinking = result.content[0]
+        assert isinstance(thinking, ThinkingBlock)
+        self.assertEqual(thinking.replay_field, "reasoning_content")
+        self.assertTrue(completions.arguments["stream"])
+
+    def test_stream_assembles_interleaved_tool_call_fragments(self) -> None:
+        first_calls = (
+            namespace(
+                index=0,
+                id="call-1",
+                function=namespace(name="read_", arguments='{"pa'),
+            ),
+            namespace(
+                index=1,
+                id="call-2",
+                function=namespace(name="grep_", arguments='{"query":"x"'),
+            ),
+        )
+        second_calls = (
+            namespace(
+                index=1,
+                id=None,
+                function=namespace(name="search", arguments="}"),
+            ),
+            namespace(
+                index=0,
+                id=None,
+                function=namespace(name="file", arguments='th":"a.py"}'),
+            ),
+        )
+        completions = FakeCompletions(
+            (
+                stream_chunk(tool_calls=first_calls),
+                stream_chunk(tool_calls=second_calls, finish_reason="tool_calls"),
+            )
+        )
+        provider = OpenAICompatibleProvider("model", stream=True, client=FakeClient(completions))
+        events = []
+
+        result = provider.complete(
+            CompletionRequest(messages=(), system_prompt="System"),
+            event_sink=events.append,
+        )
+
+        self.assertEqual(events, [])
+        self.assertEqual(result.stop_reason, StopReason.TOOL_USE)
+        self.assertEqual(
+            [(call.id, call.name, call.arguments) for call in result.tool_calls],
+            [
+                ("call-1", "read_file", {"path": "a.py"}),
+                ("call-2", "grep_search", {"query": "x"}),
+            ],
+        )
+
+    def test_stream_preserves_truncated_tool_arguments(self) -> None:
+        call = namespace(
+            index=0,
+            id="call-1",
+            function=namespace(name="read_file", arguments='{"path":'),
+        )
+        provider = OpenAICompatibleProvider(
+            "model",
+            stream=True,
+            client=FakeClient(
+                FakeCompletions((stream_chunk(tool_calls=(call,), finish_reason="length"),))
+            ),
+        )
+
+        result = provider.complete(
+            CompletionRequest(messages=(), system_prompt="System"),
+            event_sink=lambda event: None,
+        )
+
+        self.assertEqual(result.stop_reason, StopReason.LENGTH)
+        self.assertEqual(result.tool_calls[0].raw_arguments, '{"path":')
+        self.assertIsNotNone(result.tool_calls[0].parse_error)
+
+    def test_stream_iteration_failure_keeps_only_displayed_delta(self) -> None:
+        completions = FakeCompletions(FailingStream())
+        provider = OpenAICompatibleProvider("model", stream=True, client=FakeClient(completions))
+        events = []
+
+        with self.assertRaisesRegex(ProviderError, "connection dropped"):
+            provider.complete(
+                CompletionRequest(messages=(), system_prompt="System"),
+                event_sink=events.append,
+            )
+
+        self.assertEqual(events, [CompletionTextDelta("partial")])
+
+    def test_stream_configuration_requires_an_event_sink(self) -> None:
+        completions = FakeCompletions(response())
+        provider = OpenAICompatibleProvider("model", stream=True, client=FakeClient(completions))
+
+        result = provider.complete(CompletionRequest(messages=(), system_prompt="System"))
+
+        self.assertEqual(result.text, "done")
+        self.assertFalse(completions.arguments["stream"])
+
     def test_converts_request_messages_tools_and_text_response(self) -> None:
         completions = FakeCompletions(response())
         provider = OpenAICompatibleProvider("requested-model", client=FakeClient(completions))
@@ -171,9 +355,7 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
         for field_name in ("reasoning_content", "reasoning", "reasoning_text"):
             with self.subTest(field_name=field_name):
                 completions = FakeCompletions(response())
-                provider = OpenAICompatibleProvider(
-                    "model", client=FakeClient(completions)
-                )
+                provider = OpenAICompatibleProvider("model", client=FakeClient(completions))
                 assistant = AssistantMessage(
                     content=(ThinkingBlock("reasoning", replay_field=field_name),),
                     provider="openai-compatible",
@@ -265,9 +447,7 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
                     client=FakeClient(completions),
                 )
 
-                provider.complete(
-                    CompletionRequest(messages=(), system_prompt="System")
-                )
+                provider.complete(CompletionRequest(messages=(), system_prompt="System"))
 
                 for name, value in expected.items():
                     self.assertEqual(completions.arguments[name], value)
@@ -327,9 +507,7 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
             (ApiDialect.DEEPSEEK, ReasoningLevel.MINIMAL),
         )
         for dialect, reasoning in invalid:
-            with self.subTest(dialect=dialect, reasoning=reasoning), self.assertRaises(
-                ValueError
-            ):
+            with self.subTest(dialect=dialect, reasoning=reasoning), self.assertRaises(ValueError):
                 OpenAICompatibleProvider(
                     "model",
                     dialect=dialect,
