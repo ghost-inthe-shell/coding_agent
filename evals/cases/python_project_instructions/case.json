@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "id": "python_project_instructions",
+  "title": "按照项目指令实现 slug 生成器",
+  "category": "instruction-following",
+  "language": "Python",
+  "timeout_seconds": 20
+}

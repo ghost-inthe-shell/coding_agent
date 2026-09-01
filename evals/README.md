@@ -14,6 +14,10 @@ cases/<case-id>/
 第一版刻意不提供自动调用模型、自动批准权限或排行榜。使用同一个模型配置人工运行任务，可以先
 观察工具轨迹、失败恢复和最终代码质量；验证结果只由可执行测试决定，不使用 LLM judge。
 
+`python_project_instructions` 的 workspace 根目录包含 `AGENTS.md`。任务说明不重复其中的项目
+约束，用于验证 Agent 是否接收并遵守创建 session 时加载的项目指令；verifier 仍保持在
+workspace 外。
+
 ## 使用
 
 检查并列出任务：

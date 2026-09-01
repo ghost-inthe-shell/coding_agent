@@ -23,6 +23,9 @@ src/coding_agent/
 - assistant tool call 与 tool result 的配对关系可以在运行时验证。
 - 工具输入由 Pydantic v2 严格校验；模型可见工具输出统一限制为 50,000 字符。
 
+创建新 session 时，如果 workspace 根目录存在 `AGENTS.md`，程序会把其中的项目约束加入
+system prompt 快照。只加载根目录这一个文件，不搜索父目录、子目录或全局配置。
+
 长期设计决策见 [`docs/design.md`](docs/design.md)。
 
 ## 运行
@@ -142,6 +145,11 @@ coding-agent \
 旧版的 `sessions/<session-id>/session.json` 仍可恢复，并继续原地保存，不会被自动迁移。保存失败
 会立即终止 REPL，防止后续消息建立在未持久化的历史上。
 
+`AGENTS.md` 必须是 workspace 内不超过 50,000 字符的 UTF-8 文本；指向 workspace 外的符号
+链接会被拒绝。项目指令只在新建 session 时读取，随后作为 `SessionState.system_prompt` 的一部分
+保存。修改该文件后需要创建新 session 才会生效；`--resume` 始终使用原有快照。项目指令不能
+放宽工具权限或 Runtime 安全边界。
+
 也可不激活虚拟环境，直接使用其中的可执行文件：
 
 ```bash
@@ -219,11 +227,12 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 ### 真实任务验收
 
-`evals/` 提供三个不调用 LLM judge 的确定性任务：
+`evals/` 提供四个不调用 LLM judge 的确定性任务：
 
 - `cpp_binary_search`：读取题面，修复 C++ 二分边界并编译验证。
 - `python_ttl_cache`：根据失败测试修复 Python 到期边界。
 - `python_task_priority`：跨模型、存储和 CLI 实现向后兼容的新功能。
+- `python_project_instructions`：按照根目录 `AGENTS.md` 中的额外约束完成实现。
 
 先复制一个干净 workspace，再把 `prepare` 打印的任务说明原样发给 Agent：
 

@@ -31,6 +31,11 @@ one-shot 模式、TUI 或 REPL 内会话切换。
   登记到 `SessionState.read_file_versions`。不保存文件正文；artifact 与 workspace 外读取不登记。
 - `prompts/system.md` 是可编辑的 system prompt 源文件。创建会话时把解析后的文本保存到
   `SessionState.system_prompt`；恢复旧会话时继续使用原快照。
+- 创建新会话时只加载 workspace 根目录的 `AGENTS.md`，与基础 prompt 组合后整体快照到
+  `SessionState.system_prompt`。文件限制为 50,000 字符的 UTF-8 普通文本；workspace 内部符号
+  链接允许，越界链接拒绝。缺失或空白文件视为无项目指令，其他读取错误终止创建。第一版不搜索
+  父目录或子目录，不支持 include、条件规则、运行中重载或用户级全局指令。项目指令不能改变
+  代码强制执行的工具权限和 Runtime 安全边界。
 - Provider 接收标准消息与工具 schema，直接返回标准化 `AssistantMessage`。同步请求可以额外
   发出 text/thinking delta 供即时展示，但 delta 不进入 `SessionState`；厂商特有响应对象也
   不得进入会话状态。
