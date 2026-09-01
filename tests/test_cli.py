@@ -493,6 +493,41 @@ class ReplTests(unittest.TestCase):
         repl.assert_called_once_with(runtime, state, session_store=store, renderer=ANY)
         self.assertIsInstance(repl.call_args.kwargs["renderer"], TerminalRenderer)
 
+    def test_main_rejects_invalid_project_instructions_before_provider_creation(self) -> None:
+        (self.workspace / "AGENTS.md").write_bytes(b"\xff")
+        error_output = StringIO()
+        store = Mock()
+
+        with (
+            patch.object(cli, "SessionStore", return_value=store),
+            patch.object(cli, "_create_provider") as create_provider,
+            patch.object(cli.sys, "stderr", error_output),
+        ):
+            exit_code = cli.main(["--model", "model", "--workspace", str(self.workspace)])
+
+        self.assertEqual(exit_code, 1)
+        create_provider.assert_not_called()
+        store.save.assert_not_called()
+        self.assertIn("project instructions error", error_output.getvalue())
+        self.assertIn("not valid UTF-8", error_output.getvalue())
+
+    def test_main_resume_does_not_reload_project_instructions(self) -> None:
+        (self.workspace / "AGENTS.md").write_bytes(b"\xff")
+        store = Mock()
+        store.load.return_value = self.state
+        runtime = object()
+
+        with (
+            patch.object(cli, "SessionStore", return_value=store),
+            patch.object(cli, "_create_provider", return_value=object()),
+            patch.object(cli, "Runtime", return_value=runtime),
+            patch.object(cli, "run_repl", return_value=0) as repl,
+        ):
+            exit_code = cli.main(["--model", "model", "--resume", "session-1"])
+
+        self.assertEqual(exit_code, 0)
+        repl.assert_called_once_with(runtime, self.state, session_store=store, renderer=ANY)
+
     def test_main_fails_before_provider_creation_when_resume_cannot_load(self) -> None:
         store = Mock()
         store.load.side_effect = SessionNotFoundError("session not found: missing")

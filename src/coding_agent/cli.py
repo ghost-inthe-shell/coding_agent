@@ -26,6 +26,7 @@ from coding_agent.permissions import (
     PermissionOperation,
     PermissionRequest,
 )
+from coding_agent.prompts import ProjectInstructionsError
 from coding_agent.providers import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     AnthropicProvider,
@@ -274,7 +275,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         workspace = Path(workspace_argument).expanduser().resolve()
         if not workspace.is_dir():
             parser.error(f"workspace is not a directory: {workspace_argument}")
-        state = SessionState.create(uuid4().hex, workspace)
+        try:
+            state = SessionState.create(uuid4().hex, workspace)
+        except ProjectInstructionsError as exc:
+            _write(sys.stderr, f"coding-agent: project instructions error: {exc}\n")
+            return 1
 
     try:
         provider = _create_provider(

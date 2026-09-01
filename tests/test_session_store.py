@@ -73,6 +73,20 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(saved_path, legacy_path)
         self.assertFalse((self.store.root / "2024").exists())
 
+    def test_resume_keeps_the_project_instruction_snapshot(self) -> None:
+        workspace = Path(self.temporary.name) / "workspace"
+        workspace.mkdir()
+        instructions = workspace / "AGENTS.md"
+        instructions.write_text("Original project rule.\n", encoding="utf-8")
+        state = SessionState.create("snapshot-session", workspace)
+        self.store.save(state)
+
+        instructions.write_bytes(b"\xff")
+        restored = self.store.load("snapshot-session")
+
+        self.assertEqual(restored.system_prompt, state.system_prompt)
+        self.assertIn("Original project rule.", restored.system_prompt)
+
     def test_duplicate_legacy_and_dated_checkpoints_are_rejected(self) -> None:
         dated_path = self.store.save(self.state)
         legacy_path = self.store.root / "session-1" / "session.json"

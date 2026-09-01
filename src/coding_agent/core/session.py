@@ -56,12 +56,14 @@ class SessionState:
 
     @classmethod
     def create(cls, session_id: str, workspace_root: str | Path) -> SessionState:
-        from coding_agent.prompts.loader import load_system_prompt
+        from coding_agent.prompts import compose_session_system_prompt
+
+        workspace = Path(workspace_root).expanduser().resolve()
 
         return cls(
             session_id=session_id,
-            workspace_root=str(Path(workspace_root).expanduser().resolve()),
-            system_prompt=load_system_prompt(),
+            workspace_root=str(workspace),
+            system_prompt=compose_session_system_prompt(workspace),
         )
 
     def validate(self, *, allow_pending_tool_calls: bool = False) -> None:

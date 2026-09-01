@@ -1,5 +1,7 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from coding_agent.core.compaction import CompactionCheckpoint
 from coding_agent.core.file_state import FileVersion
@@ -185,11 +187,21 @@ class SessionStateTests(unittest.TestCase):
             FileVersion(mtime_ns=1, size=2, sha256="not-a-digest")
 
     def test_new_session_loads_a_system_prompt_snapshot(self) -> None:
-        state = SessionState.create("session-1", "/tmp")
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            instructions = workspace / "AGENTS.md"
+            instructions.write_text("Use unittest.\n", encoding="utf-8")
+
+            state = SessionState.create("session-1", workspace)
+            instructions.write_text("Use pytest.\n", encoding="utf-8")
+            next_state = SessionState.create("session-2", workspace)
 
         self.assertTrue(state.system_prompt)
         self.assertIn("Shell commands start in the workspace root.", state.system_prompt)
-        self.assertEqual(state.workspace_root, "/tmp")
+        self.assertIn("Use unittest.", state.system_prompt)
+        self.assertNotIn("Use pytest.", state.system_prompt)
+        self.assertIn("Use pytest.", next_state.system_prompt)
+        self.assertEqual(state.workspace_root, str(workspace))
 
 
 if __name__ == "__main__":
