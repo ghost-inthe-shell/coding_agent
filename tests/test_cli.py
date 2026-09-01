@@ -346,7 +346,7 @@ class ReplTests(unittest.TestCase):
         self.assertEqual(arguments.api_dialect, "generic")
         self.assertEqual(arguments.reasoning, "default")
         self.assertEqual(arguments.color, "auto")
-        self.assertFalse(arguments.stream)
+        self.assertTrue(arguments.stream)
         self.assertTrue(build_parser().parse_args(["--model", "model", "--stream"]).stream)
         self.assertFalse(
             build_parser().parse_args(["--model", "model", "--stream", "--no-stream"]).stream

@@ -33,6 +33,10 @@ one-shot 模式、TUI 或 REPL 内会话切换。
 - Provider 接收标准消息与工具 schema，直接返回标准化 `AssistantMessage`。同步请求可以额外
   发出 text/thinking delta 供即时展示，但 delta 不进入 `SessionState`；厂商特有响应对象也
   不得进入会话状态。
+- CLI 默认启用同步流式输出，并提供 `--no-stream` 回退。Provider 直接消费厂商 SDK 的同步
+  iterator，不引入 asyncio；Renderer 只展示 text/thinking delta，tool call 必须完整组装后才
+  能进入 Runtime。流中断时已经展示的 delta 不持久化，成功返回的完整 `AssistantMessage` 才是
+  会话事实。
 - OpenAI-compatible 传输与厂商 thinking 扩展分离。启动时显式选择 `generic`、`deepseek`、
   `dashscope` 或 `moonshot` API dialect；不根据模型名或 URL 猜测。Runtime 只表达
   `default/off/low/medium/high/max/minimal` 推理意图，由 Provider 映射为厂商字段。不支持的

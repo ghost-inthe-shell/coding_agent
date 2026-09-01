@@ -12,7 +12,8 @@ src/coding_agent/
 ├── providers/      # 模型 provider 边界
 ├── tools/          # 工具、执行器、结果处理和 artifact
 ├── permissions/    # 文件与命令权限边界
-└── prompts/        # system prompt 源文件与加载器
+├── prompts/        # system prompt 源文件与加载器
+└── ui/             # 同步终端 Renderer
 ```
 
 核心协议遵循三个原则：
@@ -180,9 +181,15 @@ REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看
 调用会显示规范化路径并逐次请求确认。Linux 交互式终端使用 GNU readline 提供光标移动、
 退格和当前进程内历史，并显式启用 bracketed paste，使终端支持时多行粘贴保持为一条消息。
 普通 Enter 提交；行尾输入奇数个反斜杠后按 Enter 会移除最后一个反斜杠、插入真实换行，并以
-`... ` 提示继续输入；组合后的消息保留原始缩进和内部空行。不提供 TUI、流式输出、latest
-会话选择或 REPL 内会话切换。文件写入和每条 Shell 命令也会逐次请求确认；Shell 固定在
-workspace 根目录启动，并使用 120 秒默认超时。
+`... ` 提示继续输入；组合后的消息保留原始缩进和内部空行。不提供 TUI、latest 会话选择或
+REPL 内会话切换。文件写入和每条 Shell 命令也会逐次请求确认；Shell 固定在 workspace 根目录
+启动，并使用 120 秒默认超时。
+
+模型回答默认同步流式显示：`thinking>` 使用 dim 样式，`assistant>` 显示回答，`tool>` 显示
+工具开始和结果状态。Renderer 仅使用标准库 ANSI；非 TTY 或设置 `NO_COLOR` 时自动退化为纯
+文本，也可通过 `--color auto|always|never` 控制。若兼容网关的流实现存在问题，可用
+`--no-stream` 回退到完整响应；`--stream` 可显式开启默认行为。流中断时已经显示的片段不会写入
+session，只有 Provider 成功组装的完整 `AssistantMessage` 才会持久化。
 
 模型每次调用默认最多生成 16,384 tokens，可通过 `--max-tokens` 调整；context window 默认
 按 128,000 tokens 估算，可用 `--context-window` 设置为实际模型值。历史接近安全阈值时会

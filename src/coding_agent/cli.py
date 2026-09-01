@@ -230,8 +230,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stream",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="stream model text and thinking as they arrive (default: disabled)",
+        default=True,
+        help="stream model text and thinking as they arrive (default: enabled)",
     )
     return parser
 
