@@ -120,6 +120,18 @@ class FailingStream:
         raise RuntimeError("connection dropped")
 
 
+class InterruptingStream:
+    def __init__(self):
+        self.closed = False
+
+    def __iter__(self):
+        raise KeyboardInterrupt
+        yield  # pragma: no cover - keeps this method an iterator
+
+    def close(self):
+        self.closed = True
+
+
 class OpenAICompatibleProviderTests(unittest.TestCase):
     def test_streams_thinking_and_text_then_returns_complete_message(self) -> None:
         completions = FakeCompletions(
@@ -247,6 +259,22 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
             )
 
         self.assertEqual(events, [CompletionTextDelta("partial")])
+
+    def test_stream_is_closed_when_iteration_is_interrupted(self) -> None:
+        stream = InterruptingStream()
+        provider = OpenAICompatibleProvider(
+            "model",
+            stream=True,
+            client=FakeClient(FakeCompletions(stream)),
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            provider.complete(
+                CompletionRequest(messages=(), system_prompt="System"),
+                event_sink=lambda event: None,
+            )
+
+        self.assertTrue(stream.closed)
 
     def test_stream_configuration_requires_an_event_sink(self) -> None:
         completions = FakeCompletions(response())

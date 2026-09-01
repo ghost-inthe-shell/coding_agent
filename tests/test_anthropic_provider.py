@@ -100,6 +100,18 @@ def message_delta(stop_reason="end_turn"):
     )
 
 
+class InterruptingStream:
+    def __init__(self):
+        self.closed = False
+
+    def __iter__(self):
+        raise KeyboardInterrupt
+        yield  # pragma: no cover - keeps this method an iterator
+
+    def close(self):
+        self.closed = True
+
+
 class AnthropicProviderTests(unittest.TestCase):
     def test_streams_thinking_and_text_then_returns_complete_message(self) -> None:
         events = (
@@ -214,6 +226,22 @@ class AnthropicProviderTests(unittest.TestCase):
             )
 
         self.assertEqual(deltas, [CompletionTextDelta("partial")])
+
+    def test_stream_is_closed_when_iteration_is_interrupted(self) -> None:
+        stream = InterruptingStream()
+        provider = AnthropicProvider(
+            "model",
+            stream=True,
+            client=FakeClient(FakeMessages(stream)),
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            provider.complete(
+                CompletionRequest(messages=(), system_prompt="System"),
+                event_sink=lambda event: None,
+            )
+
+        self.assertTrue(stream.closed)
 
     def test_stream_configuration_requires_an_event_sink(self) -> None:
         messages = FakeMessages(response())

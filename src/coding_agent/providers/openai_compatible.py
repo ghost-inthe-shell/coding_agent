@@ -120,6 +120,10 @@ class OpenAICompatibleProvider(LLMProvider):
                 raise
             except Exception as exc:
                 raise ProviderError(f"OpenAI-compatible stream failed: {exc}") from exc
+            finally:
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
         return _convert_response(response, self.model)
 
     def _consume_stream(
