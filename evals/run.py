@@ -97,7 +97,11 @@ def prepare_case(case: EvalCase, output: Path) -> Path:
     if destination.exists():
         raise FileExistsError(f"output already exists: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(case.workspace_template, destination)
+    shutil.copytree(
+        case.workspace_template,
+        destination,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+    )
     return destination
 
 

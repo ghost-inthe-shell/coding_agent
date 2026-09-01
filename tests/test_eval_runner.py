@@ -21,6 +21,22 @@ class EvalRunnerTests(unittest.TestCase):
             self.assertEqual((prepared / "value.txt").read_text(), "broken\n")
             self.assertEqual(verify_case(case, prepared), 0)
 
+    def test_prepare_ignores_python_cache_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            case = load_case(self._write_case(root))
+            cache = case.workspace_template / "__pycache__"
+            cache.mkdir()
+            (cache / "module.cpython-310.pyc").write_bytes(b"cache")
+            (case.workspace_template / "stray.pyc").write_bytes(b"cache")
+            (case.workspace_template / "stray.pyo").write_bytes(b"cache")
+
+            prepared = prepare_case(case, root / "prepared")
+
+            self.assertFalse((prepared / "__pycache__").exists())
+            self.assertFalse((prepared / "stray.pyc").exists())
+            self.assertFalse((prepared / "stray.pyo").exists())
+
     def test_prepare_refuses_to_overwrite_existing_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
