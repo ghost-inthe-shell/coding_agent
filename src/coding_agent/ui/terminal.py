@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
 from enum import Enum
 from typing import TextIO
 
+from coding_agent.core.events import (
+    ModelRequested,
+    ModelResponded,
+    ModelTextDelta,
+    ModelThinkingDelta,
+    RuntimeEvent,
+    ToolFinished,
+    ToolStarted,
+    TurnFinished,
+    TurnStarted,
+)
 from coding_agent.core.results import CompactionResult, RunResult
 from coding_agent.core.types import RunStatus
 
@@ -39,6 +51,53 @@ class TerminalRenderer:
         self.output_stream = output_stream
         current_environment = os.environ if environment is None else environment
         self.color_enabled = _color_enabled(color, output_stream, current_environment)
+        self._open_channel: str | None = None
+        self._current_response_streamed_text = False
+        self._last_response_streamed_text = False
+        self._tool_names: dict[str, str] = {}
+
+    def __call__(self, event: RuntimeEvent) -> None:
+        """Render one synchronous Runtime event."""
+
+        if isinstance(event, TurnStarted):
+            self._finish_channel()
+            self._last_response_streamed_text = False
+        elif isinstance(event, ModelRequested):
+            self._finish_channel()
+            self._current_response_streamed_text = False
+        elif isinstance(event, ModelThinkingDelta):
+            self._start_channel("thinking")
+            self.write(self._style(event.thinking, _DIM))
+        elif isinstance(event, ModelTextDelta):
+            self._start_channel("assistant")
+            self._current_response_streamed_text = True
+            self.write(self._style(event.text, _GREEN))
+        elif isinstance(event, ModelResponded):
+            self._finish_channel()
+            self._last_response_streamed_text = self._current_response_streamed_text
+        elif isinstance(event, ToolStarted):
+            self._finish_channel()
+            self._tool_names[event.call.id] = event.call.name
+            arguments = json.dumps(
+                event.call.arguments,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            label = self._style("tool>", _BOLD, _CYAN)
+            name = self._style(event.call.name, _YELLOW)
+            self.write(f"{label} {name} {arguments}\n")
+        elif isinstance(event, ToolFinished):
+            self._finish_channel()
+            name = self._tool_names.pop(
+                event.result.tool_call_id,
+                event.result.tool_name,
+            )
+            label = self._style("tool>", _BOLD, _CYAN)
+            status = event.result.status.value
+            color = _GREEN if not event.result.is_error else _RED
+            self.write(f"{label} {name} {self._style(status, color)}\n")
+        elif isinstance(event, TurnFinished):
+            self._finish_channel()
 
     def write(self, text: str) -> None:
         self.output_stream.write(text)
@@ -59,10 +118,14 @@ class TerminalRenderer:
 
     def assistant(self, text: str) -> None:
         if text:
-            self.write(f"{self._style('assistant>', _BOLD, _GREEN)} {text}\n")
+            label = self._style("assistant>", _BOLD, _GREEN)
+            self.write(f"{label} {self._style(text, _GREEN)}\n")
 
     def run_result(self, result: RunResult) -> None:
-        self.assistant(result.final_text)
+        self._finish_channel()
+        if not self._last_response_streamed_text:
+            self.assistant(result.final_text)
+        self._last_response_streamed_text = False
         if result.status is RunStatus.COMPLETED:
             return
 
@@ -122,6 +185,22 @@ class TerminalRenderer:
     def session_error(self, message: str) -> None:
         label = self._style("[session_error]", _BOLD, _RED)
         self.write(f"{label} checkpoint failed; REPL terminated: {message}\n")
+
+    def _start_channel(self, channel: str) -> None:
+        if self._open_channel == channel:
+            return
+        self._finish_channel()
+        if channel == "thinking":
+            label = self._style("thinking>", _DIM, _YELLOW)
+        else:
+            label = self._style("assistant>", _BOLD, _GREEN)
+        self.write(f"{label} ")
+        self._open_channel = channel
+
+    def _finish_channel(self) -> None:
+        if self._open_channel is not None:
+            self.write("\n")
+            self._open_channel = None
 
     def _style(self, text: str, *codes: str, readline: bool = False) -> str:
         if not self.color_enabled:

@@ -55,16 +55,13 @@ Input:
 
 
 class _ReplRuntime(Protocol):
-    def run_turn(self, state: SessionState, user_input: str) -> RunResult:
-        ...
+    def run_turn(self, state: SessionState, user_input: str) -> RunResult: ...
 
-    def compact(self, state: SessionState) -> CompactionResult:
-        ...
+    def compact(self, state: SessionState) -> CompactionResult: ...
 
 
 class _SessionSaver(Protocol):
-    def save(self, state: SessionState) -> Path:
-        ...
+    def save(self, state: SessionState) -> Path: ...
 
 
 class InteractivePermissionHandler:
@@ -165,10 +162,7 @@ def run_repl(
 
         result = runtime.run_turn(state, prompt)
         renderer.run_result(result)
-        if (
-            session_store is not None
-            and not _save_checkpoint(session_store, state, renderer)
-        ):
+        if session_store is not None and not _save_checkpoint(session_store, state, renderer):
             return 1
 
 
@@ -204,9 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reasoning",
         choices=tuple(
-            level.value
-            for level in ReasoningLevel
-            if level is not ReasoningLevel.MINIMAL
+            level.value for level in ReasoningLevel if level is not ReasoningLevel.MINIMAL
         ),
         default=ReasoningLevel.DEFAULT.value,
         help="main-request reasoning level (default: provider default)",
@@ -215,19 +207,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-turns",
         type=_positive_int,
         default=DEFAULT_MAX_MODEL_CALLS,
-        help=(
-            "maximum agent model calls per user turn "
-            f"(default: {DEFAULT_MAX_MODEL_CALLS})"
-        ),
+        help=(f"maximum agent model calls per user turn (default: {DEFAULT_MAX_MODEL_CALLS})"),
     )
     parser.add_argument(
         "--max-tokens",
         type=_positive_int,
         default=DEFAULT_MAX_OUTPUT_TOKENS,
-        help=(
-            "maximum output tokens per model call "
-            f"(default: {DEFAULT_MAX_OUTPUT_TOKENS})"
-        ),
+        help=(f"maximum output tokens per model call (default: {DEFAULT_MAX_OUTPUT_TOKENS})"),
     )
     parser.add_argument(
         "--context-window",
@@ -240,6 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=tuple(mode.value for mode in ColorMode),
         default=ColorMode.AUTO.value,
         help="terminal color mode (default: auto)",
+    )
+    parser.add_argument(
+        "--stream",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="stream model text and thinking as they arrive (default: disabled)",
     )
     return parser
 
@@ -286,6 +278,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_tokens=arguments.max_tokens,
             api_dialect=ApiDialect(arguments.api_dialect),
             reasoning=ReasoningLevel(arguments.reasoning),
+            stream=arguments.stream,
         )
     except (ImportError, ValueError) as exc:
         parser.error(str(exc))
@@ -302,6 +295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             RunShellTool(),
         ),
         permission_handler=InteractivePermissionHandler(renderer=renderer),
+        event_sink=renderer,
         context_window=arguments.context_window,
         limits=RuntimeLimits(max_model_calls=arguments.max_turns),
     )
@@ -322,19 +316,21 @@ def _create_provider(
     max_tokens: int,
     api_dialect: ApiDialect,
     reasoning: ReasoningLevel,
+    stream: bool,
 ) -> LLMProvider:
     if provider_name == "anthropic":
         if api_dialect is not ApiDialect.GENERIC:
             raise ValueError("api_dialect is only supported by openai-compatible")
         if reasoning is not ReasoningLevel.DEFAULT:
             raise ValueError("reasoning is not implemented for anthropic")
-        return AnthropicProvider(model, max_tokens=max_tokens)
+        return AnthropicProvider(model, max_tokens=max_tokens, stream=stream)
     return OpenAICompatibleProvider(
         model,
         base_url=base_url,
         max_tokens=max_tokens,
         dialect=api_dialect,
         reasoning=reasoning,
+        stream=stream,
     )
 
 

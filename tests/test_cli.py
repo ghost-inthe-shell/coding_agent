@@ -91,9 +91,7 @@ class ReplTests(unittest.TestCase):
         self.assertIn("assistant> second answer", output.getvalue())
 
     def test_trailing_backslash_builds_one_multiline_prompt(self) -> None:
-        runtime = RecordingRuntime(
-            [RunResult(status=RunStatus.COMPLETED, final_text="answer")]
-        )
+        runtime = RecordingRuntime([RunResult(status=RunStatus.COMPLETED, final_text="answer")])
         output = StringIO()
 
         exit_code = run_repl(
@@ -126,9 +124,7 @@ class ReplTests(unittest.TestCase):
         self.assertIn("> ... ", output.getvalue())
 
     def test_even_trailing_backslashes_are_submitted_literally(self) -> None:
-        runtime = RecordingRuntime(
-            [RunResult(status=RunStatus.COMPLETED, final_text="answer")]
-        )
+        runtime = RecordingRuntime([RunResult(status=RunStatus.COMPLETED, final_text="answer")])
 
         exit_code = run_repl(
             runtime,
@@ -350,12 +346,15 @@ class ReplTests(unittest.TestCase):
         self.assertEqual(arguments.api_dialect, "generic")
         self.assertEqual(arguments.reasoning, "default")
         self.assertEqual(arguments.color, "auto")
+        self.assertFalse(arguments.stream)
+        self.assertTrue(build_parser().parse_args(["--model", "model", "--stream"]).stream)
+        self.assertFalse(
+            build_parser().parse_args(["--model", "model", "--stream", "--no-stream"]).stream
+        )
 
     def test_parser_does_not_expose_internal_minimal_reasoning(self) -> None:
         with self.assertRaises(SystemExit):
-            build_parser().parse_args(
-                ["--model", "model", "--reasoning", "minimal"]
-            )
+            build_parser().parse_args(["--model", "model", "--reasoning", "minimal"])
 
     def test_main_rejects_openai_reasoning_options_for_anthropic(self) -> None:
         invalid_options = (
@@ -389,6 +388,7 @@ class ReplTests(unittest.TestCase):
                 max_tokens=8_192,
                 api_dialect=ApiDialect.DEEPSEEK,
                 reasoning=ReasoningLevel.LOW,
+                stream=True,
             )
 
         self.assertIs(result, provider)
@@ -398,6 +398,7 @@ class ReplTests(unittest.TestCase):
             max_tokens=8_192,
             dialect=ApiDialect.DEEPSEEK,
             reasoning=ReasoningLevel.LOW,
+            stream=True,
         )
 
     def test_workspace_and_resume_are_mutually_exclusive(self) -> None:
@@ -483,6 +484,10 @@ class ReplTests(unittest.TestCase):
         self.assertEqual(state.workspace_root, str(self.workspace))
         self.assertEqual(len(state.session_id), 32)
         self.assertEqual(runtime_class.call_args.kwargs["limits"].max_model_calls, 64)
+        self.assertIs(
+            runtime_class.call_args.kwargs["event_sink"],
+            repl.call_args.kwargs["renderer"],
+        )
         repl.assert_called_once_with(runtime, state, session_store=store, renderer=ANY)
         self.assertIsInstance(repl.call_args.kwargs["renderer"], TerminalRenderer)
 
@@ -514,18 +519,14 @@ class ReplTests(unittest.TestCase):
             patch.object(cli, "run_repl") as repl,
             patch.object(cli.sys, "stderr", error_output),
         ):
-            exit_code = cli.main(
-                ["--model", "model", "--workspace", str(self.workspace)]
-            )
+            exit_code = cli.main(["--model", "model", "--workspace", str(self.workspace)])
 
         self.assertEqual(exit_code, 1)
         repl.assert_not_called()
         self.assertIn("disk full", error_output.getvalue())
 
     def test_real_tty_uses_terminal_input_editor(self) -> None:
-        runtime = RecordingRuntime(
-            [RunResult(status=RunStatus.COMPLETED, final_text="answer")]
-        )
+        runtime = RecordingRuntime([RunResult(status=RunStatus.COMPLETED, final_text="answer")])
         input_stream = InteractiveStringIO()
         output_stream = InteractiveStringIO()
         readline = Mock()
@@ -552,9 +553,7 @@ class ReplTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual([call[1] for call in runtime.calls], ["edited\nquestion"])
-        readline.parse_and_bind.assert_called_once_with(
-            "set enable-bracketed-paste on"
-        )
+        readline.parse_and_bind.assert_called_once_with("set enable-bracketed-paste on")
         self.assertEqual(
             [call.args[0] for call in terminal_input.call_args_list],
             ["> ", "> "],
@@ -610,9 +609,7 @@ class InteractivePermissionHandlerTests(unittest.TestCase):
             output_stream=output,
         )
 
-        decision = handler(
-            PermissionRequest(PermissionOperation.READ, "/outside/file.txt")
-        )
+        decision = handler(PermissionRequest(PermissionOperation.READ, "/outside/file.txt"))
 
         self.assertEqual(decision, PermissionDecision.ALLOW)
         self.assertIn("/outside/file.txt", output.getvalue())
@@ -641,9 +638,7 @@ class InteractivePermissionHandlerTests(unittest.TestCase):
             output_stream=output,
         )
 
-        decision = handler(
-            PermissionRequest(PermissionOperation.WRITE, "/workspace/new.py")
-        )
+        decision = handler(PermissionRequest(PermissionOperation.WRITE, "/workspace/new.py"))
 
         self.assertEqual(decision, PermissionDecision.ALLOW)
         self.assertIn("write in the workspace", output.getvalue())

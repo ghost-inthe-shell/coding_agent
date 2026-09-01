@@ -1,8 +1,18 @@
 import unittest
 from io import StringIO
 
-from coding_agent.core.results import CompactionResult, RunResult
-from coding_agent.core.types import RunStatus
+from coding_agent.core.events import (
+    ModelRequested,
+    ModelResponded,
+    ModelTextDelta,
+    ModelThinkingDelta,
+    ToolFinished,
+    ToolStarted,
+    TurnStarted,
+)
+from coding_agent.core.messages import AssistantMessage, TextBlock, ToolCall
+from coding_agent.core.results import CompactionResult, RunResult, ToolResult
+from coding_agent.core.types import RunStatus, StopReason
 from coding_agent.core.usage import Usage
 from coding_agent.ui import ColorMode, TerminalRenderer
 
@@ -13,6 +23,69 @@ class TTYStringIO(StringIO):
 
 
 class TerminalRendererTests(unittest.TestCase):
+    def test_runtime_deltas_render_once_and_keep_thinking_separate(self) -> None:
+        output = StringIO()
+        renderer = TerminalRenderer(output, color=ColorMode.NEVER)
+        renderer(TurnStarted("session-1"))
+        renderer(ModelRequested("session-1", 1))
+        renderer(ModelThinkingDelta("session-1", 1, "inspect "))
+        renderer(ModelThinkingDelta("session-1", 1, "first"))
+        renderer(ModelTextDelta("session-1", 1, "hel"))
+        renderer(ModelTextDelta("session-1", 1, "lo"))
+        message = AssistantMessage(
+            content=(TextBlock("hello"),),
+            provider="test",
+            model="model",
+        )
+        renderer(ModelResponded("session-1", 1, message))
+
+        renderer.run_result(RunResult(status=RunStatus.COMPLETED, final_text="hello"))
+
+        self.assertEqual(
+            output.getvalue(),
+            "thinking> inspect first\nassistant> hello\n",
+        )
+
+    def test_non_streamed_result_still_renders_at_turn_boundary(self) -> None:
+        output = StringIO()
+        renderer = TerminalRenderer(output, color=ColorMode.NEVER)
+        renderer(TurnStarted("session-1"))
+        renderer(ModelRequested("session-1", 1))
+        message = AssistantMessage(
+            content=(TextBlock("answer"),),
+            provider="test",
+            model="model",
+        )
+        renderer(ModelResponded("session-1", 1, message))
+
+        renderer.run_result(RunResult(status=RunStatus.COMPLETED, final_text="answer"))
+
+        self.assertEqual(output.getvalue(), "assistant> answer\n")
+
+    def test_tool_events_pair_by_call_id_without_rendering_result_body(self) -> None:
+        output = StringIO()
+        renderer = TerminalRenderer(output, color=ColorMode.NEVER)
+        call = ToolCall(
+            id="call-1",
+            name="read_file",
+            arguments={"path": "README.md"},
+        )
+        assistant = AssistantMessage(
+            content=(call,),
+            provider="test",
+            model="model",
+            stop_reason=StopReason.TOOL_USE,
+        )
+        renderer(ModelResponded("session-1", 1, assistant))
+        renderer(ToolStarted("session-1", call))
+        renderer(ToolFinished("session-1", ToolResult.from_text("secret").to_message(call)))
+
+        self.assertEqual(
+            output.getvalue(),
+            'tool> read_file {"path":"README.md"}\ntool> read_file success\n',
+        )
+        self.assertNotIn("secret", output.getvalue())
+
     def test_auto_color_is_plain_for_non_terminal_output(self) -> None:
         output = StringIO()
         renderer = TerminalRenderer(output, environment={})
@@ -32,7 +105,7 @@ class TerminalRendererTests(unittest.TestCase):
 
         self.assertTrue(renderer.color_enabled)
         self.assertIn("\x1b[32m", output.getvalue())
-        self.assertIn("assistant>\x1b[0m answer", output.getvalue())
+        self.assertIn("assistant>\x1b[0m \x1b[32manswer", output.getvalue())
 
     def test_no_color_environment_disables_auto_color(self) -> None:
         output = TTYStringIO()
