@@ -511,8 +511,31 @@ class ReplTests(unittest.TestCase):
         self.assertIn("project instructions error", error_output.getvalue())
         self.assertIn("not valid UTF-8", error_output.getvalue())
 
+    def test_main_rejects_invalid_project_skill_before_provider_creation(self) -> None:
+        skill = self.workspace / ".agents" / "skills" / "review" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_bytes(b"\xff")
+        error_output = StringIO()
+        store = Mock()
+
+        with (
+            patch.object(cli, "SessionStore", return_value=store),
+            patch.object(cli, "_create_provider") as create_provider,
+            patch.object(cli.sys, "stderr", error_output),
+        ):
+            exit_code = cli.main(["--model", "model", "--workspace", str(self.workspace)])
+
+        self.assertEqual(exit_code, 1)
+        create_provider.assert_not_called()
+        store.save.assert_not_called()
+        self.assertIn("project skills error", error_output.getvalue())
+        self.assertIn("not valid UTF-8", error_output.getvalue())
+
     def test_main_resume_does_not_reload_project_instructions(self) -> None:
         (self.workspace / "AGENTS.md").write_bytes(b"\xff")
+        skill = self.workspace / ".agents" / "skills" / "broken" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_bytes(b"\xff")
         store = Mock()
         store.load.return_value = self.state
         runtime = object()

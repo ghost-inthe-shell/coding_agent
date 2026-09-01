@@ -5,9 +5,11 @@ from pathlib import Path
 
 from coding_agent.prompts import (
     MAX_PROJECT_SKILLS,
+    MAX_SKILL_CATALOG_CHARS,
     MAX_SKILL_CHARS,
     ProjectSkillsError,
     discover_project_skills,
+    format_project_skills_for_prompt,
     load_project_skill,
 )
 
@@ -151,6 +153,27 @@ class ProjectSkillsTests(unittest.TestCase):
             load_project_skill(self.workspace, "../escape")
         with self.assertRaisesRegex(ProjectSkillsError, "not found"):
             load_project_skill(self.workspace, "not-found")
+
+    def test_prompt_catalog_contains_only_escaped_metadata(self) -> None:
+        self.write_skill(
+            "review",
+            skill_document(
+                "review",
+                description="Review <code> & tests.",
+                instructions="SECRET BODY MUST BE LOADED LATER.\n",
+            ),
+        )
+
+        catalog = format_project_skills_for_prompt(
+            discover_project_skills(self.workspace)
+        )
+
+        self.assertIn("<name>review</name>", catalog)
+        self.assertIn("Review &lt;code&gt; &amp; tests.", catalog)
+        self.assertIn(".agents/skills/review/SKILL.md", catalog)
+        self.assertNotIn("SECRET BODY", catalog)
+        self.assertLessEqual(len(catalog), MAX_SKILL_CATALOG_CHARS)
+        self.assertEqual(format_project_skills_for_prompt(()), "")
 
 
 if __name__ == "__main__":

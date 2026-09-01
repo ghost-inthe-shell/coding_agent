@@ -26,7 +26,7 @@ from coding_agent.permissions import (
     PermissionOperation,
     PermissionRequest,
 )
-from coding_agent.prompts import ProjectInstructionsError
+from coding_agent.prompts import ProjectInstructionsError, ProjectSkillsError
 from coding_agent.providers import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     AnthropicProvider,
@@ -279,6 +279,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             state = SessionState.create(uuid4().hex, workspace)
         except ProjectInstructionsError as exc:
             _write(sys.stderr, f"coding-agent: project instructions error: {exc}\n")
+            return 1
+        except ProjectSkillsError as exc:
+            _write(sys.stderr, f"coding-agent: project skills error: {exc}\n")
             return 1
 
     try:

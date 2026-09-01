@@ -191,16 +191,31 @@ class SessionStateTests(unittest.TestCase):
             workspace = Path(temporary)
             instructions = workspace / "AGENTS.md"
             instructions.write_text("Use unittest.\n", encoding="utf-8")
+            skill = workspace / ".agents" / "skills" / "review" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text(
+                "---\nname: review\ndescription: Review Python changes.\n---\n"
+                "PRIVATE REVIEW STEPS.\n",
+                encoding="utf-8",
+            )
 
             state = SessionState.create("session-1", workspace)
             instructions.write_text("Use pytest.\n", encoding="utf-8")
+            skill.write_text(
+                "---\nname: review\ndescription: New description.\n---\nNew steps.\n",
+                encoding="utf-8",
+            )
             next_state = SessionState.create("session-2", workspace)
 
         self.assertTrue(state.system_prompt)
         self.assertIn("Shell commands start in the workspace root.", state.system_prompt)
         self.assertIn("Use unittest.", state.system_prompt)
         self.assertNotIn("Use pytest.", state.system_prompt)
+        self.assertIn("Review Python changes.", state.system_prompt)
+        self.assertNotIn("PRIVATE REVIEW STEPS", state.system_prompt)
+        self.assertNotIn("New description.", state.system_prompt)
         self.assertIn("Use pytest.", next_state.system_prompt)
+        self.assertIn("New description.", next_state.system_prompt)
         self.assertEqual(state.workspace_root, str(workspace))
 
 

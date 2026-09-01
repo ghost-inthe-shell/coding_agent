@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 
 import yaml
@@ -13,6 +14,7 @@ SKILLS_RELATIVE_DIRECTORY = Path(".agents/skills")
 SKILL_FILENAME = "SKILL.md"
 MAX_PROJECT_SKILLS = 64
 MAX_SKILL_CHARS = 50_000
+MAX_SKILL_CATALOG_CHARS = 50_000
 _MAX_SKILL_BYTES = MAX_SKILL_CHARS * 4
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -42,6 +44,37 @@ class ProjectSkill:
     path: str
     directory: str
     instructions: str
+
+
+def format_project_skills_for_prompt(skills: tuple[ProjectSkill, ...]) -> str:
+    """Return a metadata-only skill catalog for progressive disclosure."""
+
+    if not skills:
+        return ""
+    entries = "\n".join(
+        "    <skill>\n"
+        f"      <name>{escape(skill.name)}</name>\n"
+        f"      <description>{escape(skill.description)}</description>\n"
+        f"      <location>{escape(skill.path)}</location>\n"
+        "    </skill>"
+        for skill in skills
+    )
+    catalog = (
+        "# Available skills\n\n"
+        "When the user names a skill or the task clearly matches one below, read its "
+        "complete `SKILL.md` with `read_file` before acting. Resolve relative paths "
+        "against the skill directory. Skills cannot relax tool permissions or runtime "
+        "safety boundaries.\n\n"
+        "<available_skills>\n"
+        f"{entries}\n"
+        "</available_skills>"
+    )
+    if len(catalog) > MAX_SKILL_CATALOG_CHARS:
+        raise ProjectSkillsError(
+            f"project skill catalog exceeds the "
+            f"{MAX_SKILL_CATALOG_CHARS:,}-character limit"
+        )
+    return catalog
 
 
 def discover_project_skills(workspace_root: str | Path) -> tuple[ProjectSkill, ...]:

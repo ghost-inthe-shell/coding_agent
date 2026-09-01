@@ -11,22 +11,26 @@ from .project import (
 )
 from .skills import (
     MAX_PROJECT_SKILLS,
+    MAX_SKILL_CATALOG_CHARS,
     MAX_SKILL_CHARS,
     ProjectSkill,
     ProjectSkillsError,
     discover_project_skills,
+    format_project_skills_for_prompt,
     load_project_skill,
 )
 
 __all__ = [
     "MAX_PROJECT_INSTRUCTIONS_CHARS",
     "MAX_PROJECT_SKILLS",
+    "MAX_SKILL_CATALOG_CHARS",
     "MAX_SKILL_CHARS",
     "ProjectSkill",
     "ProjectSkillsError",
     "ProjectInstructionsError",
     "compose_session_system_prompt",
     "discover_project_skills",
+    "format_project_skills_for_prompt",
     "load_compaction_prompt",
     "load_project_instructions",
     "load_project_skill",
