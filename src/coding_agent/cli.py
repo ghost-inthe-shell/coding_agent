@@ -42,7 +42,7 @@ from coding_agent.tools import (
     RunShellTool,
     WriteFileTool,
 )
-from coding_agent.ui import ColorMode, TerminalRenderer
+from coding_agent.ui import ColorMode, TerminalRenderer, ThinkingDisplay
 
 HELP_TEXT = """Commands:
   /compact  Summarize older conversation history now.
@@ -233,6 +233,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="stream model text and thinking as they arrive (default: enabled)",
     )
+    parser.add_argument(
+        "--thinking-display",
+        choices=tuple(mode.value for mode in ThinkingDisplay),
+        default=ThinkingDisplay.BRIEF.value,
+        help="terminal thinking display mode (default: brief)",
+    )
     return parser
 
 
@@ -283,7 +289,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ImportError, ValueError) as exc:
         parser.error(str(exc))
 
-    renderer = TerminalRenderer(sys.stdout, color=ColorMode(arguments.color))
+    renderer = TerminalRenderer(
+        sys.stdout,
+        color=ColorMode(arguments.color),
+        thinking_display=ThinkingDisplay(arguments.thinking_display),
+    )
     runtime = Runtime(
         provider,
         (

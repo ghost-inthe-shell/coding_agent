@@ -185,11 +185,14 @@ REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看
 REPL 内会话切换。文件写入和每条 Shell 命令也会逐次请求确认；Shell 固定在 workspace 根目录
 启动，并使用 120 秒默认超时。
 
-模型回答默认同步流式显示：`thinking>` 使用 dim 样式，`assistant>` 显示回答，`tool>` 显示
-工具开始和结果状态。Renderer 仅使用标准库 ANSI；非 TTY 或设置 `NO_COLOR` 时自动退化为纯
-文本，也可通过 `--color auto|always|never` 控制。若兼容网关的流实现存在问题，可用
-`--no-stream` 回退到完整响应；`--stream` 可显式开启默认行为。流中断时已经显示的片段不会写入
-session，只有 Provider 成功组装的完整 `AssistantMessage` 才会持久化。
+模型回答默认同步流式显示：`assistant>` 正文使用终端默认前景色，`tool>` 显示工具开始和结果
+状态。thinking 默认只显示 dim/italic 活动提示和隐藏字符数，避免较长推理淹没回答；可通过
+`--thinking-display brief|full|hidden` 分别选择摘要提示、完整内容或完全隐藏。该选项只影响终端
+展示，不改变 Provider 收集、session 持久化或 token usage；如需减少模型实际生成的推理，应
+使用 Provider 支持的 `--reasoning off|low`。Renderer 仅使用标准库 ANSI；非 TTY 或设置
+`NO_COLOR` 时自动退化为纯文本，也可通过 `--color auto|always|never` 控制。若兼容网关的流
+实现存在问题，可用 `--no-stream` 回退到完整响应；`--stream` 可显式开启默认行为。流中断时
+已经显示的片段不会写入 session，只有 Provider 成功组装的完整 `AssistantMessage` 才会持久化。
 
 模型每次调用默认最多生成 16,384 tokens，可通过 `--max-tokens` 调整；context window 默认
 按 128,000 tokens 估算，可用 `--context-window` 设置为实际模型值。历史接近安全阈值时会

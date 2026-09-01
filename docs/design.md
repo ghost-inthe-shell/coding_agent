@@ -37,6 +37,9 @@ one-shot 模式、TUI 或 REPL 内会话切换。
   iterator，不引入 asyncio；Renderer 只展示 text/thinking delta，tool call 必须完整组装后才
   能进入 Runtime。流中断时已经展示的 delta 不持久化，成功返回的完整 `AssistantMessage` 才是
   会话事实。
+- thinking 展示与模型 reasoning 配置相互独立。Renderer 默认使用 `brief`，只显示活动提示和
+  本次隐藏字符数；`full` 显示完整增量，`hidden` 不显示。三种模式都不改变标准消息、持久化或
+  token usage。
 - OpenAI-compatible 传输与厂商 thinking 扩展分离。启动时显式选择 `generic`、`deepseek`、
   `dashscope` 或 `moonshot` API dialect；不根据模型名或 URL 猜测。Runtime 只表达
   `default/off/low/medium/high/max/minimal` 推理意图，由 Provider 映射为厂商字段。不支持的

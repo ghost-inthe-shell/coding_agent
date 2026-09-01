@@ -29,9 +29,16 @@ class ColorMode(str, Enum):
     NEVER = "never"
 
 
+class ThinkingDisplay(str, Enum):
+    BRIEF = "brief"
+    FULL = "full"
+    HIDDEN = "hidden"
+
+
 _RESET = "\x1b[0m"
 _BOLD = "\x1b[1m"
 _DIM = "\x1b[2m"
+_ITALIC = "\x1b[3m"
 _RED = "\x1b[31m"
 _GREEN = "\x1b[32m"
 _YELLOW = "\x1b[33m"
@@ -47,12 +54,17 @@ class TerminalRenderer:
         output_stream: TextIO,
         *,
         color: ColorMode = ColorMode.AUTO,
+        thinking_display: ThinkingDisplay = ThinkingDisplay.BRIEF,
         environment: Mapping[str, str] | None = None,
     ) -> None:
+        if not isinstance(thinking_display, ThinkingDisplay):
+            raise TypeError("thinking_display must be a ThinkingDisplay")
         self.output_stream = output_stream
         current_environment = os.environ if environment is None else environment
         self.color_enabled = _color_enabled(color, output_stream, current_environment)
+        self.thinking_display = thinking_display
         self._open_channel: str | None = None
+        self._hidden_thinking_characters = 0
         self._current_response_streamed_text = False
         self._last_response_streamed_text = False
         self._tool_names: dict[str, str] = {}
@@ -67,8 +79,7 @@ class TerminalRenderer:
             self._finish_channel()
             self._current_response_streamed_text = False
         elif isinstance(event, ModelThinkingDelta):
-            self._start_channel("thinking")
-            self.write(self._style(event.thinking, _DIM))
+            self._thinking_delta(event.thinking)
         elif isinstance(event, ModelTextDelta):
             self._start_channel("assistant")
             self._current_response_streamed_text = True
@@ -192,7 +203,7 @@ class TerminalRenderer:
             return
         self._finish_channel()
         if channel == "thinking":
-            label = self._style("thinking>", _DIM)
+            label = self._style("thinking>", _DIM, _ITALIC)
         else:
             label = self._style("assistant>", _BOLD, _BLUE)
         self.write(f"{label} ")
@@ -200,8 +211,28 @@ class TerminalRenderer:
 
     def _finish_channel(self) -> None:
         if self._open_channel is not None:
+            if (
+                self._open_channel == "thinking"
+                and self.thinking_display is ThinkingDisplay.BRIEF
+                and self._hidden_thinking_characters
+            ):
+                detail = f" ({self._hidden_thinking_characters} chars hidden)"
+                self.write(self._style(detail, _DIM))
             self.write("\n")
             self._open_channel = None
+            self._hidden_thinking_characters = 0
+
+    def _thinking_delta(self, thinking: str) -> None:
+        if self.thinking_display is ThinkingDisplay.HIDDEN:
+            return
+        if self.thinking_display is ThinkingDisplay.FULL:
+            self._start_channel("thinking")
+            self.write(self._style(thinking, _DIM, _ITALIC))
+            return
+        if self._open_channel != "thinking":
+            self._start_channel("thinking")
+            self.write(self._style("…", _DIM, _ITALIC))
+        self._hidden_thinking_characters += len(thinking)
 
     def _style(self, text: str, *codes: str, readline: bool = False) -> str:
         if not self.color_enabled:

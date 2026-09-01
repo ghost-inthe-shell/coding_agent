@@ -14,7 +14,7 @@ from coding_agent.core.messages import AssistantMessage, TextBlock, ToolCall
 from coding_agent.core.results import CompactionResult, RunResult, ToolResult
 from coding_agent.core.types import RunStatus, StopReason
 from coding_agent.core.usage import Usage
-from coding_agent.ui import ColorMode, TerminalRenderer
+from coding_agent.ui import ColorMode, TerminalRenderer, ThinkingDisplay
 
 
 class TTYStringIO(StringIO):
@@ -25,7 +25,11 @@ class TTYStringIO(StringIO):
 class TerminalRendererTests(unittest.TestCase):
     def test_runtime_deltas_render_once_and_keep_thinking_separate(self) -> None:
         output = StringIO()
-        renderer = TerminalRenderer(output, color=ColorMode.NEVER)
+        renderer = TerminalRenderer(
+            output,
+            color=ColorMode.NEVER,
+            thinking_display=ThinkingDisplay.FULL,
+        )
         renderer(TurnStarted("session-1"))
         renderer(ModelRequested("session-1", 1))
         renderer(ModelThinkingDelta("session-1", 1, "inspect "))
@@ -45,6 +49,37 @@ class TerminalRendererTests(unittest.TestCase):
             output.getvalue(),
             "thinking> inspect first\nassistant> hello\n",
         )
+
+    def test_brief_thinking_shows_activity_and_hidden_character_count(self) -> None:
+        output = StringIO()
+        renderer = TerminalRenderer(output, color=ColorMode.NEVER)
+
+        renderer(ModelRequested("session-1", 1))
+        renderer(ModelThinkingDelta("session-1", 1, "inspect "))
+        renderer(ModelThinkingDelta("session-1", 1, "first"))
+        renderer(ModelTextDelta("session-1", 1, "answer"))
+
+        self.assertEqual(
+            output.getvalue(),
+            "thinking> … (13 chars hidden)\nassistant> answer",
+        )
+
+    def test_hidden_thinking_emits_no_terminal_content(self) -> None:
+        output = StringIO()
+        renderer = TerminalRenderer(
+            output,
+            color=ColorMode.NEVER,
+            thinking_display=ThinkingDisplay.HIDDEN,
+        )
+
+        renderer(ModelThinkingDelta("session-1", 1, "private reasoning"))
+        renderer(ModelTextDelta("session-1", 1, "answer"))
+
+        self.assertEqual(output.getvalue(), "assistant> answer")
+
+    def test_thinking_display_mode_is_strict(self) -> None:
+        with self.assertRaises(TypeError):
+            TerminalRenderer(StringIO(), thinking_display="full")  # type: ignore[arg-type]
 
     def test_non_streamed_result_still_renders_at_turn_boundary(self) -> None:
         output = StringIO()
