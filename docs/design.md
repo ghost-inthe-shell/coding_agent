@@ -1,8 +1,258 @@
-# 设计决策
+# 设计与运行机制
 
-本项目以学习为主、作品质量为验收标准，从零实现 coding agent。允许使用模型厂商客户端与
-原生 tool calling，但不使用 agent 框架、agent SDK 或服务端托管的代码/文件执行能力。
-第一版采用同步 Runtime，并以 Linux 为首要运行环境。
+本项目以学习为主、作品质量为验收标准，从零实现一个精简 coding agent。允许使用模型厂商
+客户端与原生 tool calling，但不使用 Agent 框架、Agent SDK 或服务端托管的代码与文件执行
+能力。第一版采用同步 Runtime，以 Linux 为第一支持平台。
+
+设计目标不是复制成熟产品的全部功能，而是用尽量少的协议形成可靠闭环：模型读取代码、提出
+工具调用、在本地执行、观察结果、继续推理，直到给出答案或触发明确的停止条件。
+
+## 系统全景
+
+```text
+REPL ──用户输入──> Runtime ──标准请求──> Provider ──HTTP──> Model API
+ │                    │                      │
+ │                    │                      └─ 标准化 AssistantMessage
+ │                    │
+ │                    ├─ ToolExecutor ──> 权限与路径校验 ──> 本地文件 / Shell
+ │                    ├─ ContextBudget / Compaction
+ │                    └─ 强类型 RuntimeEvent ──> TerminalRenderer
+ │
+ └─ 稳定轮次结束──> SessionStore ──> session.json + tool-results/
+```
+
+边界职责如下：
+
+- REPL 只负责输入、命令分派、展示和稳定边界保存，不实现 Agent 推理。
+- Runtime 是唯一的 Agent Loop，负责消息顺序、预算、工具执行和停止条件。
+- Provider 只做标准协议与厂商 API 之间的转换，不保存会话。
+- ToolExecutor 严格校验参数并执行一个工具，不决定对话下一步。
+- `SessionState` 是会话事实来源；Renderer 收到的流式 delta 只用于展示。
+
+## 会话生命周期
+
+### 创建与恢复
+
+新会话先解析 workspace，组合基础 system prompt、根目录 `AGENTS.md` 和项目技能元数据目录，
+生成一次不可变的 `SessionState.system_prompt` 快照。初始 checkpoint 在进入 REPL 前保存。
+
+恢复会话只接受显式 `--resume SESSION_ID`：从 checkpoint 恢复原 workspace、system prompt、完整
+消息、compact checkpoint、文件版本表和累计 usage。Provider、模型、reasoning、context window
+与调用预算属于本次进程配置，不写入 `SessionState`，恢复时需要重新传入。恢复不会重新加载
+`AGENTS.md` 或自动技能目录，避免同一 session 的高优先级提示静默变化。
+
+### 三种不同的数据视图
+
+系统刻意区分以下状态：
+
+1. `SessionState.messages`：完整、可审计的标准消息历史，compact 不删除它。
+2. active context：实际发给 Provider 的摘要加近期消息，是完整历史的投影视图。
+3. text/thinking delta：Provider 流式返回、Renderer 即时展示的临时事件，不进入会话。
+
+只有 Provider 成功组装出的完整 `AssistantMessage` 才能进入历史。因此网络流中断时，终端可能
+已经显示部分文本，但 checkpoint 不会把该片段误当成可靠回答。
+
+### 稳定 checkpoint
+
+会话只在创建完成、`Runtime.run_turn` 正常返回或手动 compact 正常返回后保存。`running` 状态
+或末尾存在未配对 tool call 的状态不允许持久化；保存失败立即终止 REPL，避免后续对话建立在
+只存在于内存的历史上。
+
+checkpoint 按会话创建时的本地日期存放在：
+
+```text
+${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/YYYY/MM/DD/<session-id>/session.json
+```
+
+保存采用同目录临时文件、文件 `fsync`、原子替换和目录 `fsync`。目录权限为 `0700`，JSON 为
+`0600`。旧版平铺 checkpoint 可以继续恢复并原地保存，但不会被隐式迁移；同一 ID 出现多个
+checkpoint 时拒绝猜测。
+
+## 消息协议
+
+核心消息只有三类：`UserMessage`、`AssistantMessage` 和 `ToolResultMessage`。Assistant 内容由
+`TextBlock`、`ThinkingBlock` 与 `ToolCall` 组成；Provider 特有响应对象永远不进入会话状态。
+
+每个 assistant tool call 必须按声明顺序紧邻一个具有相同 ID 和工具名的 result，且 call ID 在
+会话中唯一。正常稳定状态不能以 pending tool call 结尾。这个约束同时服务于：
+
+- 向不同 Provider 重放一致的历史；
+- compact 时按完整消息组切分；
+- 中断、超限和失败后仍能保存合法 checkpoint。
+
+核心消息和会话状态使用 dataclass。Pydantic v2 只承担工具入参与技能 frontmatter 的严格校验
+（`strict=True`、禁止额外字段），工具 JSON Schema 也由 Pydantic 生成；技能 YAML 使用
+`yaml.safe_load`。
+
+## Agent Loop
+
+`Runtime.run_turn(state, user_input)` 对一次用户输入执行一个同步循环：
+
+1. 验证已有消息协议，将 session 标记为 `running`，追加 `UserMessage`。
+2. 组装本轮 artifact store、工具执行器、workspace、权限处理器和文件版本表。
+3. 在每次模型调用前估算完整请求；达到阈值时先自动 compact。
+4. 用 `system_prompt + active_messages + tool schemas` 调用 Provider。
+5. 将标准化 `AssistantMessage` 追加到完整历史并累计 usage。
+6. 如果没有 tool call，结束本轮；否则按模型给出的顺序同步执行每个工具。
+7. 每个调用无论成功、拒绝、超时或参数错误，都生成配对的 `ToolResultMessage`。
+8. 将工具结果加入历史，再回到第 3 步，让模型观察结果并决定下一步。
+9. 结束时设置稳定状态、验证完整消息序列、发出 `TurnFinished`，由 REPL 保存 checkpoint。
+
+第一版故意顺序执行同一 assistant 消息中的多个工具。这样权限询问、文件版本变化、输出顺序和
+中断语义都是确定的；暂不为工具并行引入资源冲突和结果乱序处理。
+
+### 预算和最后一次调用
+
+单个用户 turn 默认最多执行 32 次 Agent 模型调用和 32 个实际工具调用。最后一次模型调用不
+提供任何工具，并追加 Runtime limit 指令，要求模型如实说明已完成内容、未完成内容和下一步，
+从而避免在没有后续执行机会时继续承诺工具操作。
+
+工具预算耗尽时，同一批尚未执行的调用仍会收到合成错误结果；若模型预算允许，再进行一次无
+工具的最终调用。由于任务是被预算强制停止，即使最终文本有用，`RunResult` 仍标记为
+`limit_reached`。
+
+### 特殊停止条件
+
+- 正常文本且无 tool call：返回 `completed`。
+- Provider 错误：返回 `provider_error`，不伪造成工具结果。
+- 用户中断：正在执行和等待执行的 tool call 都补成 `cancelled` result，随后返回
+  `interrupted`；正在执行的操作可能已有部分副作用，结果会明确提示。
+- 模型达到输出 token 上限且只有文本：保留部分文本并返回 `limit_reached`。
+- 模型达到输出 token 上限且包含 tool call：不执行可能被截断的参数，为每个 call 生成错误
+  result；还有模型预算时允许模型重新发出完整调用。
+- 未预期的协议或程序错误：把 session 标记为 `error` 并向上抛出，不伪装成可恢复业务错误。
+
+## 上下文预算与 Compact
+
+### 触发阈值
+
+Runtime 不依赖特定模型 tokenizer，而是对 system prompt、active messages 和 tool schemas 做
+保守估算：ASCII 约按 4 字符/token，非 ASCII 约按 3 UTF-8 字节/token。自动 compact 在以下
+阈值中较早到达者触发：
+
+```text
+min(
+  context_window × 80%,
+  context_window - max_output_tokens - safety_margin
+)
+```
+
+其中 `safety_margin = max(1024, context_window × 2%)`。第二个阈值为下一次完整输出预留空间，
+避免输入未到 80% 却已经挤占输出预算。
+
+### Rolling summary
+
+compact 不重写或删除完整历史，只保存：
+
+```text
+CompactionCheckpoint(
+  summary,
+  first_kept_message_index,
+  tokens_before,
+  created_at,
+)
+```
+
+之后 Provider 看到的 active context 为：
+
+```text
+[Previous conversation summary]
+<summary>
+[End previous conversation summary]
++ SessionState.messages[first_kept_message_index:]
+```
+
+自动 compact 从旧 checkpoint 继续向前滚动，输入是“已有 summary + 本次移出的完整消息组”，
+同时保留近期后缀；近期目标为 `min(20,000 tokens, context_window × 25%)`。切点只能位于消息组
+边界，绝不拆开 assistant tool calls 及其 results。system prompt 始终单独发送，不进入摘要。
+
+摘要调用复用当前 Provider 和模型，但使用独立 compaction system prompt、关闭所有工具、最多
+输出 2,048 tokens，并请求 Provider 支持的最小推理强度。摘要调用计入 session 和本 turn 的
+token usage，但不占 Agent 模型调用预算。
+
+### 候选摘要的提交规则
+
+摘要必须满足以下条件才会替换旧 checkpoint：
+
+- 返回完整、非空、纯文本内容；
+- 没有 tool call，且未因输出 token 上限截断；
+- 使用相同估算器和当前 tools 重新计算后，`tokens_after < tokens_before`。
+
+因此手动 `/compact` 后 token 反而增加时，候选摘要不会生效；完整历史和旧 checkpoint 保持
+不变，但已经发生的摘要调用 usage 仍会记录。自动 compact 无法安全产生更小上下文，或没有
+合法消息组可继续压缩且请求仍放不下时，本轮明确失败，而不是发送已知会溢出的请求。
+
+手动 `/compact` 只能在稳定 turn 边界运行，尝试总结当前全部 active history；自动 compact
+通常保留近期后缀。第一版不实现 tool result 的 microcompact/snip，也不接受自定义 compact
+指令。
+
+## Provider、流式事件与 Renderer
+
+Provider 接收标准 `CompletionRequest`，直接返回标准化 `AssistantMessage`。OpenAI-compatible
+使用同步 Chat Completions；Anthropic 使用同步 Messages API，并把连续 tool results 合并成
+厂商要求的 user 消息。不同 Provider 的原始对象与异常不会泄漏进 `SessionState`。
+
+OpenAI-compatible 传输与 thinking 扩展分离。启动时显式选择 `generic`、`deepseek`、
+`dashscope` 或 `moonshot` dialect，不根据模型名称或 URL 猜测。Runtime 表达统一的 reasoning
+意图，由 Provider 映射成厂商字段；不支持的用户配置直接拒绝，不静默换档。
+
+同步流式输出直接消费厂商 SDK 的同步 iterator，不引入 asyncio。Runtime 只暴露八种强类型
+事件：turn started、model requested、model text delta、model thinking delta、model responded、
+tool started、tool finished、turn finished；不实现 EventBus 或通用 hook 框架。
+
+Renderer 默认以 `brief` 隐藏长 thinking，只展示活动提示和字符数；`full` 与 `hidden` 只改变
+终端显示，不影响 Provider、持久化或 token usage。工具轨迹使用有界摘要，Shell 最多展示前
+两行、160 字符；权限确认仍显示 JSON 转义后的完整命令，避免用户批准未展示的操作。
+
+## 项目指令与技能
+
+创建新会话时只加载 workspace 根目录的 `AGENTS.md`。文件必须是不超过 50,000 字符的 UTF-8
+普通文本；workspace 内符号链接允许，越界链接拒绝。缺失或空白文件视为没有项目指令，其他
+读取错误终止创建。第一版不搜索父目录、子目录或用户级全局指令。
+
+项目技能只从 `.agents/skills` 的直接子目录发现，最多 64 个。每个 `SKILL.md` 不超过 50,000
+字符，YAML frontmatter 只允许与目录一致的 kebab-case `name` 和非空 `description`。新 session
+只快照经过 XML 转义且总长不超过 50,000 字符的技能元数据目录；自动选择后由模型用
+`read_file` 读取正文，实现 progressive disclosure。
+
+`/skill:name [request]` 在调用时严格读取当前正文，将其与请求展开为实际 UserMessage 后交给
+Runtime，所以旧 session 也能显式使用后来新增或更新的技能。第一版不提供全局技能、嵌套发现、
+Skill tool、MCP 或子 Agent。项目指令和技能都不能放宽工具权限或 Runtime 安全边界。
+
+## 本地工具、权限与文件一致性
+
+只读工具为 `read_file`、`glob_files` 和 `grep_search`。grep 优先使用 ripgrep，不可用时回退
+系统 grep；glob 和 grep 不设置匹配条数上限。`read_file` 保留 offset/limit，因为分页属于读取
+语义。
+
+路径先解析真实位置，再执行权限策略：
+
+- workspace 和当前 session artifact 内读取自动允许；workspace 外读取逐次询问且不记忆。
+- workspace 外写入、artifact 写入和符号链接逃逸硬拒绝。
+- workspace 内有效写入逐次询问；无效请求在询问前拒绝。
+- 操作系统权限始终是最后一层约束；当前策略不是 Shell 沙箱。
+
+workspace 内成功的 `read_file` 会把规范相对路径、`mtime_ns`、文件大小和全文件 SHA-256 登记
+到 `SessionState.read_file_versions`，但不保存正文。`write_file` 只排他创建新 UTF-8 文件并登记
+版本；`edit_file` 要求目标已有可信版本、当前版本仍一致、`old_text` 非空且精确出现一次。确认
+后再重复校验，以同目录临时文件原子替换并更新版本，缩小 read-before-edit 的竞态窗口。
+
+`run_shell` 只接受 command 和可选 timeout，固定通过 `/bin/bash -c` 从 workspace 根目录同步
+执行，不向模型暴露 cwd。每次调用都询问且不做命令分类；stdin 连接 `/dev/null`，默认超时 120
+秒、最大 600 秒。超时或原始输出达到硬上限时终止整个进程组。子进程继承普通环境，但删除
+`OPENAI_API_KEY` 与 `ANTHROPIC_API_KEY`。
+
+## 工具结果与 Artifact
+
+所有工具结果统一经过 `ToolResultProcessor`。模型可见文本最多 50,000 字符；更长内容返回头尾
+预览，并把完整内容保存在当前 session 的 `tool-results/`。`read_file` 和 `grep_search` 可以读取
+这些 artifact，让模型继续定位原始输出。
+
+单次原始捕获与单个 artifact 使用 10 MiB 硬上限；达到上限即停止捕获并标记结果不完整，避免
+先无限占用内存或磁盘再做展示截断。artifact 跟随 checkpoint 的实际目录，因此恢复旧版平铺
+session 时也继续写入原目录。
+
+## 评测边界
 
 真实任务验收使用干净 workspace 副本和 Agent 结束后运行的确定性外部 verifier，不比较参考
 diff，也不使用 LLM judge。无人值守评测必须在一次性容器内运行；容器隔离完成前只做逐次确认
@@ -10,144 +260,11 @@ diff，也不使用 LLM judge。无人值守评测必须在一次性容器内运
 
 `evals/run.py report` 通过 case ID 和 session ID 重新运行 verifier，并从严格 checkpoint 派生
 只读指标。Agent 模型调用数只统计 assistant 消息，compact 内部调用只反映在累计 usage；
-conversation span 包含用户确认等待。工具状态按完整协议分别统计，报告不估算不稳定的模型价格。
-human/JSON 输出都不持久化，PASS、验收失败和配置错误分别使用退出码 0、1、2。
+conversation span 包含用户确认等待。报告不估算不稳定的模型价格，也不修改 session 或
+workspace。PASS、验收失败和配置错误分别使用退出码 0、1、2。
 
-交互客户端直接采用同步 REPL，并在同一个 `SessionState` 上执行多轮对话。第一版提供 help、
-compact、skill 和 exit 命令，Linux 交互 TTY 使用 Python 标准库 GNU readline 编辑，并显式启用
-bracketed paste。普通 Enter 提交；奇数个行尾反斜杠表示移除最后一个反斜杠并继续收集下一行，
-从而在同一条用户消息中插入换行。终端展示使用标准库 ANSI Renderer 和同步流式输出；不实现
-one-shot 模式、TUI 或 REPL 内会话切换。
+## 第一版非目标
 
-## 核心边界
-
-- `SessionState` 是会话状态的唯一事实来源。`Runtime.run_turn` 修改传入的状态，不在内部
-  维护第二份消息历史。
-- 会话只在创建完成及 `Runtime.run_turn` 正常返回后的稳定边界持久化；`running` 状态或存在
-  未配对 tool call 的状态不得写入。checkpoint 失败立即终止 REPL，避免继续产生仅存在于
-  内存中的历史。
-- `--resume SESSION_ID` 只恢复显式指定的会话，使用其中保存的 workspace，并与
-  `--workspace` 互斥。不提供 latest、会话列表或 REPL 内切换。
-- 新 checkpoint 按不可变的会话创建时间对应的本地日期保存到
-  `${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/YYYY/MM/DD/<session-id>/session.json`，采用
-  同目录临时文件、`fsync` 和原子替换；日期与会话目录权限为 `0700`，JSON 文件为 `0600`。
-  已存在的旧版平铺 checkpoint 可继续恢复并原地保存，不做隐式迁移。
-- workspace 内成功的 `read_file` 将规范相对路径及 `mtime_ns`、大小和全文件 SHA-256
-  登记到 `SessionState.read_file_versions`。不保存文件正文；artifact 与 workspace 外读取不登记。
-- `prompts/system.md` 是可编辑的 system prompt 源文件。创建会话时把解析后的文本保存到
-  `SessionState.system_prompt`；恢复旧会话时继续使用原快照。
-- 创建新会话时只加载 workspace 根目录的 `AGENTS.md`，与基础 prompt 组合后整体快照到
-  `SessionState.system_prompt`。文件限制为 50,000 字符的 UTF-8 普通文本；workspace 内部符号
-  链接允许，越界链接拒绝。缺失或空白文件视为无项目指令，其他读取错误终止创建。第一版不搜索
-  父目录或子目录，不支持 include、条件规则、运行中重载或用户级全局指令。项目指令不能改变
-  代码强制执行的工具权限和 Runtime 安全边界。
-- 项目技能只从 `.agents/skills` 的直接子目录发现。每个 `SKILL.md` 限制为 50,000 字符的
-  UTF-8 文本，YAML frontmatter 只允许与目录一致的 kebab-case `name` 和非空 `description`。
-  新 session 的 system prompt 只快照经过 XML 转义的技能元数据目录，不含正文；自动选择后由
-  模型使用 `read_file` 读取完整正文。`/skill:name [request]` 则严格加载当前正文，将其与请求
-  展开为实际 UserMessage 后交给 Runtime，因此可在 resume 后显式使用新增或更新的技能。技能
-  不能放宽工具权限或 Runtime 安全边界。第一版不提供全局技能、嵌套发现或 skill tool。
-- Provider 接收标准消息与工具 schema，直接返回标准化 `AssistantMessage`。同步请求可以额外
-  发出 text/thinking delta 供即时展示，但 delta 不进入 `SessionState`；厂商特有响应对象也
-  不得进入会话状态。
-- CLI 默认启用同步流式输出，并提供 `--no-stream` 回退。Provider 直接消费厂商 SDK 的同步
-  iterator，不引入 asyncio；Renderer 只展示 text/thinking delta，tool call 必须完整组装后才
-  能进入 Runtime。流中断时已经展示的 delta 不持久化，成功返回的完整 `AssistantMessage` 才是
-  会话事实。
-- thinking 展示与模型 reasoning 配置相互独立。Renderer 默认使用 `brief`，只显示活动提示和
-  本次隐藏字符数；`full` 显示完整增量，`hidden` 不显示。三种模式都不改变标准消息、持久化或
-  token usage。
-- Renderer 的工具轨迹使用按工具定制的有界摘要；Shell 摘要最多显示前两行、160 字符。展示
-  截断不改变工具参数，Shell 权限确认始终显示 JSON 转义后的完整命令。
-- OpenAI-compatible 传输与厂商 thinking 扩展分离。启动时显式选择 `generic`、`deepseek`、
-  `dashscope` 或 `moonshot` API dialect；不根据模型名或 URL 猜测。Runtime 只表达
-  `default/off/low/medium/high/max/minimal` 推理意图，由 Provider 映射为厂商字段。不支持的
-  用户配置明确拒绝，不静默换档；这些启动配置不进入 `SessionState`。
-- `AssistantMessage` 可包含标准化 `ThinkingBlock`；它不并入用户可见文本，但会随会话
-  持久化。可选 `replay_field` 只记录 OpenAI-compatible 接口回传推理内容所需的字段名。
-- OpenAI-compatible Provider 使用同步 Chat Completions，将响应中第一个非空的
-  `reasoning_content`/`reasoning`/`reasoning_text` 标准化为 `ThinkingBlock`，并在后续请求
-  中按原字段回传。
-- Anthropic Provider 使用同步 Messages API，并把连续 tool results 合并为一个 user 消息。
-- 核心消息和会话状态使用 dataclass。Pydantic v2 用于工具入参与技能 frontmatter 的严格校验
-  （`strict=True`、禁止额外字段）；工具 schema 由 Pydantic 生成。技能 YAML 只通过
-  `yaml.safe_load` 解析。
-
-## Runtime
-
-`Runtime.run_turn(state, user_input)` 执行一个同步的模型/工具循环。Assistant tool call 与
-tool result 始终按原顺序完整配对。单轮默认最多执行 32 次 Agent 模型调用、实际执行工具
-32 次；最后一次 Agent 调用固定不提供工具，用于说明已完成内容、未完成内容和后续步骤。
-若同一批调用超过工具预算，所有跳过的调用都会收到合成错误结果，并在剩余模型预算内发出
-不带工具的最终请求。因任一预算进入最终请求时，即使模型返回了有用文本，`RunResult` 仍标记
-为 `limit_reached`。
-
-两个 Provider 的单次默认输出上限统一为 16,384 tokens。`RunResult.max_output_tokens`
-记录单次请求上限，而 `RunResult.usage.output_tokens` 是整个 turn 多次模型调用的累计值。
-
-模型 context window 是启动配置，默认 128,000 tokens，不进入 `SessionState`。Runtime 使用
-本地保守估算，并在以下两个阈值中较早到达者触发自动压缩：context window 的 80%，或
-`context_window - max_output_tokens - safety_margin`；安全余量为 `max(1024, context window 的
-2%)`。第二项为下一次响应保留完整输出空间，避免输入虽未达到 80%，却已挤占模型输出预算。
-
-压缩不删除 `SessionState.messages` 中的原始历史，只保存一个向前移动的 compaction
-checkpoint；Provider 看到的是 checkpoint 摘要加未压缩后缀。自动压缩总结“已有 rolling
-summary + 本次新移出的历史”并保留近期后缀；稳定边界的手动 `/compact` 尝试总结全部 active
-history。system prompt 不进入摘要。摘要调用复用当前 Provider 和模型、关闭 tools、最多输出
-2,048 tokens，并请求该 dialect 可提供的最小推理强度。候选 checkpoint 只有在相同估算器和
-tools 下满足 `tokens_after < tokens_before` 才能生效；否则保留旧 checkpoint，但仍累计已经
-发生的摘要 usage。自动摘要属于 Runtime 内部维护调用：计入本 turn 和 session 的 token usage，
-但不占 Agent 模型调用预算；事件中的 Provider 调用序号仍包含它。手动摘要位于 turn 外，也不受
-单 turn 调用次数限制。截断、失败、空文本或包含 tool call 的摘要不得替换旧 checkpoint。
-第一版不做 tool result 的 microcompact/snip；裸命令 `/compact` 不接收自定义压缩指令。
-
-若模型因输出 token 限制停止，纯文本作为部分结果以 `limit_reached` 结束；若响应包含 tool
-calls，Runtime 不执行整批调用，而是逐个生成配对错误结果，并在模型调用预算允许时继续循环。
-
-Runtime 只提供一个可选的同步事件接收函数，并且只有八种强类型事件：turn started、model
-requested、model text delta、model thinking delta、model responded、tool started、tool
-finished、turn finished。不实现 EventBus 或通用 hook 框架。
-
-预期内的 Provider 失败、非法工具入参、路径拒绝和普通工具 I/O 失败转换为明确结果。未预期
-的程序或协议错误会停止 Runtime，不得伪装成普通工具输出。
-
-## 本地工具与权限
-
-第一批工具为 `read_file`、`glob_files` 和 `grep_search`。适合时优先调用 ripgrep；
-`grep_search` 在 ripgrep 不可用时使用系统 grep。glob 和 grep 不设置各自的匹配条数上限。
-`read_file` 仍使用 offset/limit，因为分页属于读取语义，不是另一套结果限制策略。
-
-解析真实路径后，只自动允许读取 workspace 根目录和当前 session 的 agent artifact 根目录，
-从而阻止符号链接越界。REPL 对 workspace 外的每次只读调用同步询问且不记忆授权；没有权限
-处理器、用户拒绝、中断或输入结束时均拒绝。批准只允许工具尝试本次读取，操作系统权限始终
-是最后一层约束。workspace 外写入仍拒绝。
-
-写路径策略分为两个阶段：先解析真实路径并硬拒绝 workspace 外、agent artifact 和符号链接
-逃逸；写工具完成自身校验后，再对 workspace 内目标逐次同步确认且不记忆授权。这样无效的
-写入请求不会提前打扰用户。
-
-`write_file` 只创建新的 UTF-8 文件，保留模型给出的确切内容，不覆盖已有路径，也不自动创建
-父目录。排他创建用于防止确认后出现的文件被覆盖；成功后把新文件登记为可信版本。
-
-`edit_file` 每次只接受一组 `path`、`old_text`、`new_text`，不做模糊匹配、换行归一化或批量
-替换。目标必须已有可信版本，当前 `mtime_ns`、大小和 SHA-256 必须仍一致，且 `old_text` 必须
-非空并精确出现一次。确认后重复校验，再以同目录临时文件原子替换并更新可信版本。
-
-`run_shell` 只接受 `command` 和可选的 `timeout_seconds`，固定通过 `/bin/bash -c` 在 workspace
-根目录同步执行，不向模型暴露 cwd。每次有效调用都逐次确认且不做安全命令分类；这不是 Shell
-沙箱，命令仍可访问操作系统允许的 workspace 外资源。stdin 连接 `/dev/null`，默认超时 120
-秒、最大 600 秒；超时或达到原始输出硬上限时终止整个进程组。子进程继承普通环境，但删除
-`OPENAI_API_KEY` 和 `ANTHROPIC_API_KEY`。
-
-## 工具输出
-
-所有结果统一经过 `ToolResultProcessor`。模型最多看到 50,000 字符；更长的文本以头尾预览
-替代，完整输出保存到：
-
-```text
-${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/YYYY/MM/DD/<session-id>/tool-results/
-```
-
-`read_file` 和 `grep_search` 可以自动读取当前 session 的 artifact。单次捕获与单个 artifact
-采用全局 10 MiB 硬上限；达到上限后停止继续捕获，并把 artifact 标记为不完整。artifact 始终
-跟随已解析的 checkpoint 目录，因此恢复旧版平铺会话时也继续写在旧目录内。
+第一版不实现 TUI、异步 Runtime、并行工具、Web Search、长期记忆、全局技能、插件系统、MCP、
+多 Agent 或内置容器沙箱。这些能力只有在真实评测暴露明确需求后才进入后续版本，避免扩大核心
+协议和可靠性表面积。
