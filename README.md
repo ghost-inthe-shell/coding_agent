@@ -1,161 +1,153 @@
 # Coding Agent
 
-从零实现的 Python 编程智能体。目前已经完成同步 Runtime、核心协议、两个模型 Provider、
-只读工具、最小文件写入/精确编辑工具、受确认保护的 Shell 工具，以及支持会话恢复的同步
-REPL。
+一个从零实现的精简 Python coding agent。它使用模型原生 tool calling，在本地完成代码读取、
+搜索、创建、精确编辑、命令执行和测试，并支持流式 REPL、权限确认、会话恢复、上下文压缩、
+`AGENTS.md` 与项目技能。
 
-## 结构
+项目不依赖 LangChain、LlamaIndex、OpenAI Agents SDK、Claude Agent SDK 等 Agent 框架，也不
+使用服务端托管的代码执行或文件工具。架构和运行机制见 [docs/design.md](docs/design.md)。
 
-```text
-src/coding_agent/
-├── core/           # 消息、会话状态、事件和同步 Runtime
-├── providers/      # 模型 provider 边界
-├── tools/          # 工具、执行器、结果处理和 artifact
-├── permissions/    # 文件与命令权限边界
-├── prompts/        # system prompt 源文件与加载器
-└── ui/             # 同步终端 Renderer
-```
+## 安装
 
-核心协议遵循三个原则：
-
-- `SessionState` 是唯一的会话历史，system prompt 以会话快照保存。
-- Provider 特有对象不会进入会话状态。
-- assistant tool call 与 tool result 的配对关系可以在运行时验证。
-- 工具输入由 Pydantic v2 严格校验；模型可见工具输出统一限制为 50,000 字符。
-
-创建新 session 时，如果 workspace 根目录存在 `AGENTS.md`，程序会把其中的项目约束加入
-system prompt 快照。项目还可在 `.agents/skills/` 声明按需加载的技能；第一版不搜索父目录、
-子目录或用户级全局配置。
-
-长期设计决策见 [`docs/design.md`](docs/design.md)。
-
-## 运行
-
-### 首次安装
-
-`coding-agent` 是安装项目时生成的命令行入口，不是系统自带命令。在项目根目录
-创建虚拟环境，并以可编辑模式安装项目及两个 Provider 依赖：
+Linux 是第一支持平台。进入包含 `setup.cfg` 的项目根目录后执行：
 
 ```bash
-cd /home/lmz/coding_agent/coding_agent
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e '.[openai,anthropic]'
 ```
 
-只需安装一个 Provider 时，可分别使用 `.[openai]` 或 `.[anthropic]`。
-
-### 在新 Bash 中启动
-
-虚拟环境不会自动跨 Bash 进程生效。每次打开新 Bash 后，首先激活已创建的
-虚拟环境：
+只使用一个 Provider 时，可以安装 `.[openai]` 或 `.[anthropic]`。`coding-agent` 是安装项目时
+生成的命令，因此每个新 Bash 都需要先在项目根目录激活虚拟环境：
 
 ```bash
-cd /home/lmz/coding_agent/coding_agent
 source .venv/bin/activate
+coding-agent --help
 ```
 
-然后加载 OpenAI-compatible 接口配置。`set -a` 会使 `.env` 中没有显式写
-`export` 的变量也能传递给 Python 进程：
+如果不想激活虚拟环境，也可以从项目根目录直接运行：
 
 ```bash
-set -a
-source /home/lmz/.config/coding-agent/test.env
-set +a
-
-mkdir -p /home/lmz/test_agent
-coding-agent \
-  --provider openai-compatible \
-  --workspace /home/lmz/test_agent \
-  --model deepseek-v4-flash \
-  --base-url "$OPENAI_BASE_URL" \
-  --api-dialect deepseek \
-  --reasoning low \
-  --max-tokens 32768 \
-  --max-turns 32
+.venv/bin/coding-agent --help
 ```
 
-`OPENAI_API_KEY` 由 Provider 从环境变量读取；兼容网关的地址通过
-`--base-url` 显式传入。如果使用 OpenAI 官方地址，可省略 `--base-url`。
-
-OpenAI-compatible 只统一基础消息格式，不统一 thinking 扩展。`--api-dialect` 应按照实际
-API 端点选择，而不只是看模型名称：DeepSeek 官方端点使用 `deepseek`，阿里云百炼使用
-`dashscope`，Moonshot 官方端点使用 `moonshot`，其他端点保持 `generic`。`generic` 不会发送
-任何厂商 thinking 参数。
-
-主请求可通过 `--reasoning default|off|low|medium|high|max` 设置推理意图。`default` 不发送
-控制字段；其他值必须被所选 dialect 明确支持，否则启动失败。例如：
+若仍显示 `coding-agent: command not found`，确认当前目录是项目根目录，然后重新执行可编辑安装：
 
 ```bash
-# Qwen 经 DashScope 调用；具体模型仍可能只支持其中部分档位
-coding-agent \
-  --provider openai-compatible \
-  --workspace /home/lmz/test_agent \
-  --model <qwen-model> \
-  --base-url <dashscope-compatible-base-url> \
-  --api-dialect dashscope \
-  --reasoning low
-
-# Kimi 经 Moonshot 官方端点调用；当前支持 default/off
-coding-agent \
-  --provider openai-compatible \
-  --workspace /home/lmz/test_agent \
-  --model <kimi-model> \
-  --base-url <moonshot-compatible-base-url> \
-  --api-dialect moonshot \
-  --reasoning off
+source .venv/bin/activate
+python -m pip install -e '.[openai,anthropic]'
+command -v coding-agent
 ```
 
-同一模型若通过另一家兼容网关调用，应选择网关实际实现的 dialect。摘要请求自动使用最小
-推理策略：DeepSeek/Moonshot 关闭 thinking，DashScope 使用 low，generic 不发送扩展字段。
+## 启动
 
-使用 Anthropic Messages API 时：
+### OpenAI-compatible
+
+至少设置 API key，并把模型、workspace 和兼容网关地址换成自己的配置：
 
 ```bash
-set -a
-source /home/lmz/.config/coding-agent/test_anthropic.env
-set +a
+export OPENAI_API_KEY='...'
+export OPENAI_BASE_URL='https://example.com/v1'
+export MODEL_NAME='your-model'
 
+mkdir -p ./workspace
+coding-agent \
+  --provider openai-compatible \
+  --workspace ./workspace \
+  --model "$MODEL_NAME" \
+  --base-url "$OPENAI_BASE_URL"
+```
+
+使用 OpenAI 官方地址时可以省略 `--base-url`。OpenAI-compatible 只统一基础消息格式；厂商
+thinking 扩展需要显式选择实际 API 端点支持的 dialect：
+
+```text
+--api-dialect generic|deepseek|dashscope|moonshot
+--reasoning default|off|low|medium|high|max
+```
+
+`generic` 不发送厂商 thinking 参数。不支持的 reasoning 档位会在启动时明确拒绝，而不会静默
+降级。
+
+### Anthropic
+
+```bash
+export ANTHROPIC_API_KEY='...'
+export MODEL_NAME='your-model'
+
+mkdir -p ./workspace
 coding-agent \
   --provider anthropic \
-  --workspace /home/lmz/test_agent \
-  --model "$CODING_AGENT_TEST_MODEL"
+  --workspace ./workspace \
+  --model "$MODEL_NAME"
 ```
 
-Anthropic Provider 直接从环境变量读取 `ANTHROPIC_API_KEY` 和可选的
-`ANTHROPIC_BASE_URL`，因此不接收 `--base-url`。
+Anthropic Provider 还会读取可选的 `ANTHROPIC_BASE_URL`。它不接受 `--base-url` 和
+OpenAI-compatible 专用的 dialect/reasoning 参数。
 
-程序启动后会显示当前 session ID。之后可使用同样的 Provider 配置显式恢复该会话；workspace
-从 checkpoint 中读取，因此不能同时传入 `--workspace`：
+如果配置保存在环境文件中，可以在启动前加载；仓库不要求固定文件名或位置：
 
 ```bash
-coding-agent \
-  --provider openai-compatible \
-  --model deepseek-v4-flash \
-  --base-url "$OPENAI_BASE_URL" \
-  --api-dialect deepseek \
-  --reasoning low \
-  --max-tokens 32768 \
-  --max-turns 32 \
-  --resume <session-id>
+set -a
+source ./model.env
+set +a
 ```
 
-会话在创建时及每轮结束后，按会话创建时的本地日期保存到
-`${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/YYYY/MM/DD/<session-id>/session.json`。
-旧版的 `sessions/<session-id>/session.json` 仍可恢复，并继续原地保存，不会被自动迁移。保存失败
-会立即终止 REPL，防止后续消息建立在未持久化的历史上。
+### 常用参数
 
-`AGENTS.md` 必须是 workspace 内不超过 50,000 字符的 UTF-8 文本；指向 workspace 外的符号
-链接会被拒绝。项目指令只在新建 session 时读取，随后作为 `SessionState.system_prompt` 的一部分
-保存。修改该文件后需要创建新 session 才会生效；`--resume` 始终使用原有快照。项目指令不能
-放宽工具权限或 Runtime 安全边界。
+```text
+--max-tokens 16384          单次模型调用的最大输出 token
+--max-turns 32              一次用户输入最多进行的 Agent 模型调用
+--context-window 128000     本地上下文预算
+--thinking-display brief    brief、full 或 hidden
+--no-stream                 禁用默认的同步流式输出
+--color auto                auto、always 或 never
+```
 
-### 项目技能
+模型的真实 context window 和输出能力由所用 API 决定，应据此调整参数。
 
-每个项目技能放在 `.agents/skills/<name>/SKILL.md`。第一版只发现 `skills` 的直接子目录，名称
-必须是小写字母、数字和连字符组成的 kebab-case，且必须与目录名一致。文件使用 UTF-8，最多
-50,000 字符，格式如下：
+## REPL 与会话
+
+启动后直接输入任务。常用命令：
+
+```text
+/help                       显示帮助
+/compact                    手动压缩活动上下文
+/skill:name [request]       显式调用项目技能
+/exit                       退出（已完成轮次此前已保存）
+```
+
+普通 Enter 提交消息。行尾输入奇数个反斜杠再按 Enter，可以插入真实换行并继续输入；支持
+bracketed paste 的终端会把多行粘贴作为一条消息。文件写入和每条 Shell 命令都会逐次询问，
+workspace 外读取也会逐次询问。
+
+程序启动时显示 session ID。恢复时使用原 Provider 配置并传入该 ID；已保存的 workspace 会随
+session 恢复，因此不能同时使用 `--workspace`：
+
+```bash
+export SESSION_ID='your-session-id'
+
+coding-agent \
+  --provider openai-compatible \
+  --model "$MODEL_NAME" \
+  --base-url "$OPENAI_BASE_URL" \
+  --resume "$SESSION_ID"
+```
+
+checkpoint 默认保存到：
+
+```text
+${XDG_STATE_HOME:-~/.local/state}/coding-agent/sessions/YYYY/MM/DD/<session-id>/session.json
+```
+
+## 项目指令与技能
+
+新 session 会读取 workspace 根目录的 `AGENTS.md`，并将其与 system prompt 一起保存为会话
+快照。只读取这一个项目文件，不搜索父目录、子目录或用户级全局配置。修改后需要新建 session
+才能影响自动行为。
+
+项目技能位于 `.agents/skills/<name>/SKILL.md`：
 
 ```markdown
 ---
@@ -167,145 +159,47 @@ description: Review an implementation and its tests.
 Read the implementation and tests, then report correctness risks.
 ```
 
-frontmatter 只允许 `name` 和 `description`。新建 session 时，system prompt 仅保存技能名称、
-描述和 `SKILL.md` 路径，不保存正文。模型在任务与描述匹配时会通过 `read_file` 读取完整正文，
-这是 progressive disclosure：没有被选中的技能不占用上下文正文空间。
+技能名必须是与目录一致的 kebab-case；frontmatter 只允许 `name` 和 `description`。新 session
+只把名称、描述和路径放入 prompt，模型匹配后再用 `read_file` 读取正文。显式执行
+`/skill:review check the parser` 时会加载当前正文，因此 resume 后也能调用后来新增或更新的技能。
 
-也可在 REPL 中显式调用当前项目技能：
+第一版只支持项目级、依赖现有工具的技能，不扫描 `~/.codex/skills`，也不提供 Skill tool、MCP、
+插件或子 Agent。`AGENTS.md` 和技能都不能放宽代码强制执行的权限与安全边界。
 
-```text
-/skill:review check the parser changes
-```
+## 本地工具与安全边界
 
-显式调用会在执行该轮前重新读取并严格验证当前 `SKILL.md`，再把技能正文和可选请求组合成
-持久化的有效 UserMessage。因此它也适用于旧 session 中新增或更新的技能；缺失或无效技能只
-报告 `[skill_error]`，不会调用模型或保存空 checkpoint。技能中的相对路径以其技能目录为基准，
-技能不能放宽工具权限或 Runtime 安全边界。
+内置工具包括：
 
-也可不激活虚拟环境，直接使用其中的可执行文件：
+- `read_file`、`glob_files`、`grep_search`
+- `write_file`、`edit_file`
+- `run_shell`
 
-```bash
-/home/lmz/coding_agent/coding_agent/.venv/bin/coding-agent \
-  --provider openai-compatible \
-  --workspace /home/lmz/test_agent \
-  --model deepseek-v4-flash \
-  --base-url "$OPENAI_BASE_URL" \
-  --api-dialect deepseek \
-  --reasoning low \
-  --max-tokens 32768 \
-  --max-turns 32
-```
+workspace 内读取自动允许；workspace 外读取逐次确认；写入只能位于 workspace 内且逐次确认。
+`edit_file` 要求先读取目标文件，再进行唯一精确替换。Shell 固定从 workspace 根目录启动，每次
+调用都询问，默认超时 120 秒、最大 600 秒，并从子进程环境移除两个模型 API key。
 
-### `coding-agent: command not found`
+模型可见的单个工具结果最多 50,000 字符。更长内容返回头尾预览，完整结果保存在当前 session
+的 `tool-results/` 目录，供后续用读取工具定位。
 
-该错误表示当前 Bash 的 `PATH` 中没有项目命令，与 `--workspace` 或 `--model`
-参数无关。按顺序检查：
-
-```bash
-cd /home/lmz/coding_agent/coding_agent
-source .venv/bin/activate
-command -v coding-agent
-coding-agent --help
-```
-
-正常情况下，`command -v` 应输出
-`/home/lmz/coding_agent/coding_agent/.venv/bin/coding-agent`。如果 `.venv` 不存在，执行上面的
-“首次安装”；如果它存在但命令仍不存在，在激活后重新执行：
-
-```bash
-python -m pip install -e '.[openai,anthropic]'
-```
-
-REPL 在同一个 `SessionState` 上逐轮调用 Runtime。输入 `/help` 查看命令，输入 `/compact`
-可立即将较早历史更新为 rolling summary，使用 `/skill:name [request]` 显式调用项目技能，输入
-`/exit` 或按 Ctrl-D 退出。原始消息仍完整保存
-在 session checkpoint 中；压缩只改变后续发送给模型的活动上下文。workspace 外的只读工具
-调用会显示规范化路径并逐次请求确认。Linux 交互式终端使用 GNU readline 提供光标移动、
-退格和当前进程内历史，并显式启用 bracketed paste，使终端支持时多行粘贴保持为一条消息。
-普通 Enter 提交；行尾输入奇数个反斜杠后按 Enter 会移除最后一个反斜杠、插入真实换行，并以
-`... ` 提示继续输入；组合后的消息保留原始缩进和内部空行。不提供 TUI、latest 会话选择或
-REPL 内会话切换。文件写入和每条 Shell 命令也会逐次请求确认；Shell 固定在 workspace 根目录
-启动，并使用 120 秒默认超时。
-
-模型回答默认同步流式显示：`assistant>` 正文使用终端默认前景色，`tool>` 显示工具开始和结果
-状态。thinking 默认只显示 dim/italic 活动提示和隐藏字符数，避免较长推理淹没回答；可通过
-`--thinking-display brief|full|hidden` 分别选择摘要提示、完整内容或完全隐藏。该选项只影响终端
-展示，不改变 Provider 收集、session 持久化或 token usage；如需减少模型实际生成的推理，应
-使用 Provider 支持的 `--reasoning off|low`。Renderer 仅使用标准库 ANSI；非 TTY 或设置
-`NO_COLOR` 时自动退化为纯文本，也可通过 `--color auto|always|never` 控制。若兼容网关的流
-实现存在问题，可用 `--no-stream` 回退到完整响应；`--stream` 可显式开启默认行为。流中断时
-已经显示的片段不会写入 session，只有 Provider 成功组装的完整 `AssistantMessage` 才会持久化。
-
-`tool>` 使用按工具定制的短摘要，不显示 `write_file` 的文件正文或 `edit_file` 的替换文本；
-Shell 摘要最多取前两行、160 字符，并标注原命令长度。该限制只用于执行轨迹，逐次权限确认仍
-在独立边框中显示 JSON 转义后的完整命令，按终端宽度换行，避免批准未展示的操作。
-
-模型每次调用默认最多生成 16,384 tokens，可通过 `--max-tokens` 调整；context window 默认
-按 128,000 tokens 估算，可用 `--context-window` 设置为实际模型值。历史接近安全阈值时会
-自动压缩，摘要调用复用当前 Provider/模型且不开放工具。
-
-每次用户输入默认最多进行 32 次 Agent 模型调用，可通过 `--max-turns` 调整，例如复杂任务
-可使用 `--max-turns 64`。最后一次调用不提供工具，只用于如实说明已完成内容和未完成内容；
-自动 compact 的内部摘要请求累计 token usage，但不占用该回合预算。`--max-turns`、
-`--max-tokens` 等 Provider/Runtime 启动配置不保存在 session 中，恢复会话时需要重新传入。
+这些限制不是操作系统沙箱；无人值守运行不可信代码时仍应使用一次性容器或其他外部隔离。
 
 ## 验证
 
-安装并运行测试：
+运行完整测试：
 
 ```bash
-python3 -m pip install -e .
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+python -m unittest discover -s tests -v
 ```
 
-### 真实任务验收
-
-`evals/` 提供四个不调用 LLM judge 的确定性任务：
-
-- `cpp_binary_search`：读取题面，修复 C++ 二分边界并编译验证。
-- `python_ttl_cache`：根据失败测试修复 Python 到期边界。
-- `python_task_priority`：跨模型、存储和 CLI 实现向后兼容的新功能。
-- `python_project_instructions`：按照根目录 `AGENTS.md` 中的额外约束完成实现。
-
-先复制一个干净 workspace，再把 `prepare` 打印的任务说明原样发给 Agent：
+`evals/` 还提供不依赖 LLM judge 的真实任务和确定性 verifier：
 
 ```bash
-python3 evals/run.py list
-python3 evals/run.py prepare cpp_binary_search /tmp/coding-agent-eval/cpp_binary_search
-
-coding-agent \
-  --provider openai-compatible \
-  --workspace /tmp/coding-agent-eval/cpp_binary_search \
-  --model <model> \
-  --base-url <base-url>
+python evals/run.py list
+python evals/run.py prepare cpp_binary_search ./.eval-workspaces/cpp_binary_search
+python evals/run.py verify cpp_binary_search ./.eval-workspaces/cpp_binary_search
+python evals/run.py report cpp_binary_search "$SESSION_ID"
 ```
 
-Agent 结束后从项目根目录运行外部 verifier：
-
-```bash
-python3 evals/run.py verify \
-  cpp_binary_search \
-  /tmp/coding-agent-eval/cpp_binary_search
-```
-
-验收后可用 case ID 和 session ID 重新运行 verifier，并汇总 checkpoint 中的确定性指标：
-
-```bash
-python3 evals/run.py report \
-  python_project_instructions \
-  ed15e492b2d64a8aa86004db6ea3748b
-
-python3 evals/run.py report \
-  python_project_instructions \
-  ed15e492b2d64a8aa86004db6ea3748b \
-  --json
-```
-
-report 展示 Provider、模型、用户轮次、Agent 模型调用、五种工具结果状态、conversation span、
-token usage 和 compact 状态。它只读取 session，并对其中保存的 workspace 运行外部 verifier，
-不修改 session 或 workspace；退出码 `0` 表示通过、`1` 表示 verifier 失败、`2` 表示参数、case
-或 session 配置错误。
-
-不同版本之间比较时，应固定模型、Provider、reasoning、`--max-tokens`、`--max-turns` 和任务
-初始版本，并保留 session ID。完整协议、安全边界和其他 case 用法见
-[`evals/README.md`](evals/README.md)。
+`prepare` 后，从生成的 workspace 根目录启动 Agent，并把打印的任务说明原样发送给它。Agent
+结束后再运行 `verify`；不同版本比较时应固定模型、Provider、reasoning 和各项预算。详细说明见
+[evals/README.md](evals/README.md)。
