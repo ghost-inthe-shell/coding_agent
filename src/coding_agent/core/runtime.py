@@ -37,6 +37,7 @@ from coding_agent.tools.base import ToolSpec
 from .compaction import CompactionCheckpoint
 from .events import (
     EventSink,
+    ModelRequestPurpose,
     ModelRequested,
     ModelResponded,
     ModelTextDelta,
@@ -523,7 +524,13 @@ class Runtime:
         model_call: int | None = None,
     ) -> AssistantMessage:
         if model_call is not None:
-            self._emit(ModelRequested(state.session_id, model_call))
+            self._emit(
+                ModelRequested(
+                    state.session_id,
+                    model_call,
+                    purpose=ModelRequestPurpose.COMPACTION,
+                )
+            )
         response = self._provider.complete(
             CompletionRequest(
                 system_prompt=self._compaction_prompt,

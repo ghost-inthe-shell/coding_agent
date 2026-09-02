@@ -2,6 +2,7 @@ import unittest
 from io import StringIO
 
 from coding_agent.core.events import (
+    ModelRequestPurpose,
     ModelRequested,
     ModelResponded,
     ModelTextDelta,
@@ -23,6 +24,20 @@ class TTYStringIO(StringIO):
 
 
 class TerminalRendererTests(unittest.TestCase):
+    def test_auto_compaction_request_is_visible(self) -> None:
+        output = StringIO()
+        renderer = TerminalRenderer(output, color=ColorMode.NEVER)
+
+        renderer(
+            ModelRequested(
+                "session-1",
+                2,
+                purpose=ModelRequestPurpose.COMPACTION,
+            )
+        )
+
+        self.assertEqual(output.getvalue(), "context> Compacting conversation...\n")
+
     def test_runtime_deltas_render_once_and_keep_thinking_separate(self) -> None:
         output = StringIO()
         renderer = TerminalRenderer(

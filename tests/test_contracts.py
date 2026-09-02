@@ -5,6 +5,7 @@ from pathlib import Path
 from pydantic import Field
 
 from coding_agent.core.events import (
+    ModelRequestPurpose,
     ModelRequested,
     ModelResponded,
     ModelTextDelta,
@@ -131,6 +132,14 @@ class ContractTests(unittest.TestCase):
             TurnFinished,
         }
         self.assertEqual(len(event_types), 8)
+
+    def test_model_request_purpose_is_strict_and_defaults_to_agent(self) -> None:
+        self.assertIs(
+            ModelRequested("session-1", 1).purpose,
+            ModelRequestPurpose.AGENT,
+        )
+        with self.assertRaisesRegex(TypeError, "ModelRequestPurpose"):
+            ModelRequested("session-1", 1, purpose="compaction")  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

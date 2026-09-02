@@ -198,7 +198,9 @@ OpenAI-compatible 传输与 thinking 扩展分离。启动时显式选择 `gener
 
 同步流式输出直接消费厂商 SDK 的同步 iterator，不引入 asyncio。Runtime 只暴露八种强类型
 事件：turn started、model requested、model text delta、model thinking delta、model responded、
-tool started、tool finished、turn finished；不实现 EventBus 或通用 hook 框架。
+tool started、tool finished、turn finished；不实现 EventBus 或通用 hook 框架。model requested
+携带严格的 `agent|compaction` purpose，Renderer 据此在自动摘要开始时显示简短提示，而不为
+展示需求扩充事件类型；手动 compact 继续通过独立的 `CompactionResult` 展示结果。
 
 Renderer 默认以 `brief` 隐藏长 thinking，只展示活动提示和字符数；`full` 与 `hidden` 只改变
 终端显示，不影响 Provider、持久化或 token usage。工具轨迹使用有界摘要，Shell 最多展示前

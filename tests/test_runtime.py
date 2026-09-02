@@ -7,6 +7,7 @@ from pydantic import Field
 
 from coding_agent.core.compaction import CompactionCheckpoint
 from coding_agent.core.events import (
+    ModelRequestPurpose,
     ModelRequested,
     ModelResponded,
     ModelTextDelta,
@@ -569,6 +570,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn(old_marker, active_text)
         model_requests = [event for event in events if isinstance(event, ModelRequested)]
         self.assertEqual([event.model_call for event in model_requests], [1, 2])
+        self.assertEqual(
+            [event.purpose for event in model_requests],
+            [ModelRequestPurpose.COMPACTION, ModelRequestPurpose.AGENT],
+        )
         state.validate()
 
     def test_invalid_compaction_response_fails_without_replacing_checkpoint(self) -> None:

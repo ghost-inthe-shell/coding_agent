@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 
 from .messages import AssistantMessage, ToolCall, ToolResultMessage, timestamp_ms
 from .results import RunResult
+
+
+class ModelRequestPurpose(str, Enum):
+    AGENT = "agent"
+    COMPACTION = "compaction"
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +26,11 @@ class ModelRequested:
     session_id: str
     model_call: int
     timestamp: int = field(default_factory=timestamp_ms)
+    purpose: ModelRequestPurpose = ModelRequestPurpose.AGENT
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.purpose, ModelRequestPurpose):
+            raise TypeError("purpose must be a ModelRequestPurpose")
 
 
 @dataclass(frozen=True, slots=True)

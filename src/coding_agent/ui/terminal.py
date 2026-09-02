@@ -10,6 +10,7 @@ from enum import Enum
 from typing import TextIO
 
 from coding_agent.core.events import (
+    ModelRequestPurpose,
     ModelRequested,
     ModelResponded,
     ModelTextDelta,
@@ -83,6 +84,10 @@ class TerminalRenderer:
         elif isinstance(event, ModelRequested):
             self._finish_channel()
             self._current_response_streamed_text = False
+            if event.purpose is ModelRequestPurpose.COMPACTION:
+                label = self._style("context>", _BOLD, _CYAN)
+                message = self._style("Compacting conversation...", _DIM)
+                self.write(f"{label} {message}\n")
         elif isinstance(event, ModelThinkingDelta):
             self._thinking_delta(event.thinking)
         elif isinstance(event, ModelTextDelta):

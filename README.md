@@ -120,7 +120,8 @@ set +a
 
 普通 Enter 提交消息。行尾输入奇数个反斜杠再按 Enter，可以插入真实换行并继续输入；支持
 bracketed paste 的终端会把多行粘贴作为一条消息。文件写入和每条 Shell 命令都会逐次询问，
-workspace 外读取也会逐次询问。
+workspace 外读取也会逐次询问。自动上下文压缩开始时会显示
+`context> Compacting conversation...`；手动 `/compact` 成功时还会报告压缩前后的估算 token。
 
 程序启动时显示 session ID。恢复时使用原 Provider 配置并传入该 ID；已保存的 workspace 会随
 session 恢复，因此不能同时使用 `--workspace`：
