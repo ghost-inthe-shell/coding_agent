@@ -1,6 +1,6 @@
 # 设计与运行机制
 
-本项目以学习为主、作品质量为验收标准，从零实现一个精简 coding agent。允许使用模型厂商
+本项目从零实现一个精简 coding agent。允许使用模型厂商
 客户端与原生 tool calling，但不使用 Agent 框架、Agent SDK 或服务端托管的代码与文件执行
 能力。第一版采用同步 Runtime，以 Linux 为第一支持平台。
 
@@ -262,9 +262,3 @@ diff，也不使用 LLM judge。无人值守评测必须在一次性容器内运
 只读指标。Agent 模型调用数只统计 assistant 消息，compact 内部调用只反映在累计 usage；
 conversation span 包含用户确认等待。报告不估算不稳定的模型价格，也不修改 session 或
 workspace。PASS、验收失败和配置错误分别使用退出码 0、1、2。
-
-## 第一版非目标
-
-第一版不实现 TUI、异步 Runtime、并行工具、Web Search、长期记忆、全局技能、插件系统、MCP、
-多 Agent 或内置容器沙箱。这些能力只有在真实评测暴露明确需求后才进入后续版本，避免扩大核心
-协议和可靠性表面积。
